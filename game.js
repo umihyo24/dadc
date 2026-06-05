@@ -64,8 +64,9 @@ const CONFIG = Object.freeze({
     { enemies: ['captain', 'captain', 'knight', 'archer', 'healer', 'archer'], market: ['dragon', 'dragon', 'orc', 'ghost', 'goblin'] },
   ],
   ui: {
-    panel: '#241729', panel2: '#2f1d32', line: '#6d4254', text: '#f7e9cf', muted: '#c9a97f', gold: '#ffcf67',
-    red: '#ff5e57', green: '#79e28b', blue: '#8dd6ff', button: '#7b2e42', buttonHover: '#a23d55', disabled: '#493744',
+    panel: '#fff0cf', panel2: '#f6dfb4', line: '#9c6a35', text: '#3b2517', muted: '#775338', gold: '#d88922',
+    red: '#d85a4c', green: '#4fa85d', blue: '#3d8bd6', purple: '#7e55b8', orange: '#f29a2e',
+    button: '#e29a2e', buttonHover: '#f3b94d', disabled: '#c7ad88', wood: '#8b5529', parchment: '#fff4d6', ink: '#3b2517',
   },
 });
 
@@ -558,21 +559,120 @@ function safeDrawImage(context, image, x, y, w, h, fallback) {
   return false;
 }
 
-function rect(x, y, w, h, fill, stroke = CONFIG.ui.line) {
+function rect(x, y, w, h, fill, stroke = CONFIG.ui.line, radius = 12, lineWidth = 2) {
   if (!ctx) return;
   ctx.fillStyle = fill;
   ctx.strokeStyle = stroke;
-  ctx.lineWidth = 2;
+  ctx.lineWidth = lineWidth;
   ctx.beginPath();
-  ctx.roundRect(x, y, w, h, 12);
+  ctx.roundRect(x, y, w, h, radius);
   ctx.fill();
   ctx.stroke();
+}
+
+function panelFill(x, y, w, h, top, bottom) {
+  const gradient = ctx.createLinearGradient(x, y, x, y + h);
+  gradient.addColorStop(0, top);
+  gradient.addColorStop(1, bottom);
+  return gradient;
+}
+
+function drawRibbon(label, x, y, w, color = CONFIG.ui.blue, icon = '✦') {
+  if (!ctx) return;
+  ctx.save();
+  ctx.fillStyle = color;
+  ctx.strokeStyle = '#6a4327';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(x + 10, y);
+  ctx.lineTo(x + w - 10, y);
+  ctx.lineTo(x + w, y + 16);
+  ctx.lineTo(x + w - 10, y + 32);
+  ctx.lineTo(x + 10, y + 32);
+  ctx.lineTo(x, y + 16);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  ctx.restore();
+  text(`${icon} ${label}`, x + w / 2, y + 6, 16, '#fff8dc', 'center', '900');
+}
+
+function drawPanel(title, x, y, w, h, options = {}) {
+  const variant = options.variant || 'parchment';
+  const banner = options.banner || CONFIG.ui.gold;
+  const icon = options.icon || '✦';
+  const fills = {
+    parchment: ['#fff7df', '#efd3a2'],
+    wood: ['#b7793c', '#7a431f'],
+    ledger: ['#fff1b9', '#efc869'],
+    contract: ['#fff9e7', '#ead3a6'],
+    celebration: ['#fff0b9', '#f3b54c'],
+  };
+  const pair = fills[variant] || fills.parchment;
+  rect(x, y, w, h, panelFill(x, y, w, h, pair[0], pair[1]), '#8a5a2b', 16, 3);
+  ctx.save();
+  ctx.strokeStyle = 'rgba(255,255,255,0.42)';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.roundRect(x + 7, y + 7, w - 14, h - 14, 12);
+  ctx.stroke();
+  ctx.restore();
+  drawRibbon(title, x + 14, y - 4, Math.min(w - 28, 330), banner, icon);
+}
+
+function drawPill(label, x, y, w, color, fg = '#fff8dc') {
+  rect(x, y, w, 24, color, '#6a4327', 12, 2);
+  text(label, x + w / 2, y + 5, 12, fg, 'center', '900');
+}
+
+function wrapText(value, x, y, maxWidth, lineHeight, size = 12, color = CONFIG.ui.text, weight = '700') {
+  const words = String(value || '').split('');
+  let line = '';
+  let currentY = y;
+  words.forEach((char) => {
+    const test = line + char;
+    if (ctx.measureText(test).width > maxWidth && line) {
+      text(line, x, currentY, size, color, 'left', weight);
+      line = char;
+      currentY += lineHeight;
+    } else {
+      line = test;
+    }
+  });
+  if (line) text(line, x, currentY, size, color, 'left', weight);
+}
+
+function drawMonsterFallback(unit, x, y, w, h) {
+  const type = unit.speciesId || unit.enemyId || 'monster';
+  const body = unit.color || '#94c45f';
+  ctx.save();
+  ctx.fillStyle = 'rgba(255,255,255,0.25)';
+  ctx.beginPath();
+  ctx.ellipse(x + w / 2, y + h * 0.86, w * 0.33, h * 0.08, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = body;
+  ctx.strokeStyle = '#4b2b1b';
+  ctx.lineWidth = 3;
+  if (type === 'dragon') {
+    ctx.beginPath(); ctx.ellipse(x + w * 0.52, y + h * 0.58, w * 0.28, h * 0.25, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#f7c15b'; ctx.beginPath(); ctx.moveTo(x + w * 0.76, y + h * 0.5); ctx.lineTo(x + w * 0.98, y + h * 0.44); ctx.lineTo(x + w * 0.82, y + h * 0.58); ctx.fill();
+  } else if (type === 'ghost') {
+    ctx.beginPath(); ctx.arc(x + w * 0.5, y + h * 0.42, w * 0.22, Math.PI, 0); ctx.lineTo(x + w * 0.72, y + h * 0.76); ctx.quadraticCurveTo(x + w * 0.58, y + h * 0.68, x + w * 0.5, y + h * 0.78); ctx.quadraticCurveTo(x + w * 0.4, y + h * 0.68, x + w * 0.28, y + h * 0.76); ctx.closePath(); ctx.fill(); ctx.stroke();
+  } else {
+    ctx.beginPath(); ctx.ellipse(x + w * 0.5, y + h * 0.56, w * 0.22, h * 0.27, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#f0d071'; ctx.beginPath(); ctx.moveTo(x + w * 0.36, y + h * 0.32); ctx.lineTo(x + w * 0.28, y + h * 0.18); ctx.lineTo(x + w * 0.46, y + h * 0.29); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(x + w * 0.64, y + h * 0.32); ctx.lineTo(x + w * 0.72, y + h * 0.18); ctx.lineTo(x + w * 0.54, y + h * 0.29); ctx.fill();
+  }
+  ctx.fillStyle = '#1f1712';
+  ctx.beginPath(); ctx.arc(x + w * 0.43, y + h * 0.44, Math.max(2, w * 0.025), 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(x + w * 0.57, y + h * 0.44, Math.max(2, w * 0.025), 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
 }
 
 function text(value, x, y, size = 16, color = CONFIG.ui.text, align = 'left', weight = '500') {
   if (!ctx) return;
   ctx.fillStyle = color;
-  ctx.font = `${weight} ${size}px Inter, system-ui, sans-serif`;
+  ctx.font = `${weight} ${size}px "Trebuchet MS", "Noto Sans JP", system-ui, sans-serif`;
   ctx.textAlign = align;
   ctx.textBaseline = 'top';
   ctx.fillText(String(value ?? ''), x, y);
@@ -581,16 +681,11 @@ function text(value, x, y, size = 16, color = CONFIG.ui.text, align = 'left', we
 function button(id, label, x, y, w, h, action, enabled = true) {
   const mouse = gameState.input.mouse || { x: -1, y: -1 };
   const hover = enabled && mouse.x >= x && mouse.x <= x + w && mouse.y >= y && mouse.y <= y + h;
-  rect(x, y, w, h, enabled ? (hover ? CONFIG.ui.buttonHover : CONFIG.ui.button) : CONFIG.ui.disabled, enabled ? '#d88457' : '#5d4b58');
-  text(label, x + w / 2, y + 13, 16, enabled ? CONFIG.ui.text : CONFIG.ui.muted, 'center', '700');
+  const fill = enabled ? (hover ? panelFill(x, y, w, h, '#ffd86b', '#ef941e') : panelFill(x, y, w, h, '#ffc34f', '#d9821f')) : panelFill(x, y, w, h, '#d3c0a3', '#b69a74');
+  rect(x, y, w, h, fill, enabled ? '#8a4b18' : '#8c765b', 12, 3);
+  text(label, x + w / 2, y + Math.max(8, h / 2 - 9), 16, enabled ? '#3b2517' : '#7b6751', 'center', '900');
   gameState.input.buttons.push({ id, x, y, w, h, action, enabled });
 }
-
-function drawPanel(title, x, y, w, h) {
-  rect(x, y, w, h, CONFIG.ui.panel);
-  text(title, x + 14, y + 12, 18, CONFIG.ui.gold, 'left', '800');
-}
-
 
 function rowLabel(row) {
   return row === 'front' ? '前列' : row === 'back' ? '後列' : '未配置';
@@ -607,203 +702,218 @@ function traitLabels(traits) {
 
 function drawUnit(unit, x, y, w, h, selected = false) {
   if (!unit) return;
-  rect(x, y, w, h, selected ? '#493044' : CONFIG.ui.panel2, selected ? CONFIG.ui.gold : CONFIG.ui.line);
-  const imageKey = unit.unitType === 'enemy' ? `monsters.${unit.enemyId}.${unit.row}.idle` : `monsters.${unit.speciesId}.${CONFIG.monsters[unit.speciesId]?.preferredRow || 'front'}.idle`;
+  const isEnemy = unit.unitType === 'enemy';
+  const species = unit.speciesId ? CONFIG.monsters[unit.speciesId] : null;
+  const imageKey = isEnemy ? `monsters.${unit.enemyId}.${unit.row}.idle` : `monsters.${unit.speciesId}.${CONFIG.monsters[unit.speciesId]?.preferredRow || 'front'}.idle`;
+  const roleColor = isEnemy ? CONFIG.ui.red : ((species && species.preferredRow === 'front') ? CONFIG.ui.green : CONFIG.ui.blue);
+  rect(x, y, w, h, panelFill(x, y, w, h, selected ? '#fff1a8' : '#fff9e6', selected ? '#f1c574' : '#ead0a2'), selected ? '#f5a623' : '#9c6a35', 14, selected ? 4 : 2);
+
   if (w < 110) {
-    safeDrawImage(ctx, gameState.assets.images[imageKey], x + 16, y + 8, w - 32, Math.max(30, h - 34), () => {
-      ctx.fillStyle = unit.color || '#999';
-      ctx.beginPath();
-      ctx.arc(x + w / 2, y + 30, 20, 0, Math.PI * 2);
-      ctx.fill();
-      text(unit.icon || '?', x + w / 2, y + 22, 11, '#111', 'center', '900');
-    });
-    text(unit.name, x + w / 2, y + h - 20, 12, CONFIG.ui.text, 'center', '900');
+    rect(x + 8, y + 8, w - 16, Math.max(34, h - 30), panelFill(x, y, w, h, '#dff2ff', '#b9dcf5'), '#9c6a35', 10, 2);
+    safeDrawImage(ctx, gameState.assets.images[imageKey], x + 15, y + 10, w - 30, Math.max(30, h - 38), () => drawMonsterFallback(unit, x + 10, y + 6, w - 20, h - 26));
+    text(unit.name, x + w / 2, y + h - 20, 12, CONFIG.ui.ink, 'center', '900');
     return;
   }
+
   if (h < 62) {
-    safeDrawImage(ctx, gameState.assets.images[imageKey], x + 6, y + 6, 36, 36, () => {
-      ctx.fillStyle = unit.color || '#999';
-      ctx.fillRect(x + 8, y + 8, 32, 32);
-      text(unit.icon || '?', x + 24, y + 17, 9, '#111', 'center', '900');
-    });
-    text(unit.name, x + 48, y + 7, 13, CONFIG.ui.text, 'left', '900');
-    text(`${unit.attack}ATK / ${traitLabels(unit.traits)[0] || '標準'}`, x + 48, y + 27, 11, CONFIG.ui.muted);
+    rect(x + 5, y + 5, 42, 42, '#e8f4ff', '#9c6a35', 10, 2);
+    safeDrawImage(ctx, gameState.assets.images[imageKey], x + 7, y + 6, 38, 38, () => drawMonsterFallback(unit, x + 5, y + 2, 42, 45));
+    text(unit.name, x + 54, y + 6, 13, CONFIG.ui.ink, 'left', '900');
+    text(`${traitLabels(unit.traits)[0] || '標準'} ・ ATK ${unit.attack}`, x + 54, y + 27, 11, roleColor, 'left', '800');
     return;
   }
-  safeDrawImage(ctx, gameState.assets.images[imageKey], x + 8, y + 8, 52, 52, () => {
-    ctx.fillStyle = unit.color || '#999';
-    ctx.beginPath();
-    ctx.arc(x + 34, y + 34, 24, 0, Math.PI * 2);
-    ctx.fill();
-    text(unit.icon || '?', x + 34, y + 25, 13, '#111', 'center', '900');
-  });
-  text(unit.name, x + 68, y + 8, 15, CONFIG.ui.text, 'left', '800');
-  text(`HP ${Math.max(0, unit.hp)}/${unit.maxHp}  攻撃 ${unit.attack}`, x + 68, y + 29, 13, CONFIG.ui.muted);
-  text(traitLabels(unit.traits).join(', '), x + 68, y + 48, 12, CONFIG.ui.blue);
-  if (unit.unitType === 'monster') text(`雇用 ${unit.hireCost}g | 交換 ${unit.hireCost * CONFIG.economy.replacementMultiplier}g`, x + 8, y + h - 20, 12, CONFIG.ui.gold);
+
+  rect(x + 8, y + 8, Math.max(58, w * 0.48), h - 50, panelFill(x, y, w, h, '#dff2ff', '#bfdff0'), '#9c6a35', 12, 2);
+  safeDrawImage(ctx, gameState.assets.images[imageKey], x + 12, y + 12, Math.max(50, w * 0.48 - 8), h - 58, () => drawMonsterFallback(unit, x + 8, y + 6, Math.max(58, w * 0.48), h - 48));
+  const infoX = x + Math.max(72, w * 0.52);
+  text(unit.name, infoX, y + 10, 17, CONFIG.ui.ink, 'left', '900');
+  drawPill(isEnemy ? '脅威' : ((species && species.role) || rowLabel(unit.row)), infoX, y + 36, Math.min(98, w - (infoX - x) - 8), roleColor);
+  text(traitLabels(unit.traits)[0] || '標準', infoX, y + 66, 12, roleColor, 'left', '900');
+  text(`HP ${Math.max(0, unit.hp)}/${unit.maxHp}`, infoX, y + 84, 12, CONFIG.ui.muted, 'left', '800');
+  text(`ATK ${unit.attack}`, infoX + 74, y + 84, 12, CONFIG.ui.muted, 'left', '800');
+  if (unit.unitType === 'monster') text(`雇用 ${unit.hireCost}g`, x + 12, y + h - 24, 13, CONFIG.ui.gold, 'left', '900');
 }
 
 function drawStart() {
-  text('魔軍派遣センター', 640, 165, 42, CONFIG.ui.gold, 'center', '900');
-  text('あなたは指揮官ではありません。損耗予算を背負った採用責任者です。', 640, 222, 20, CONFIG.ui.text, 'center');
-  text('公開された敵名簿を分析し、効率的に雇い、節約になる時だけ合成し、10日目を生き残りましょう。', 640, 258, 17, CONFIG.ui.muted, 'center');
-  button('start', '派遣センターを開く', 505, 330, 270, 54, { type: 'start' });
+  ctx.fillStyle = panelFill(0, 0, CONFIG.canvas.width, CONFIG.canvas.height, '#95d5f5', '#f5cf8a');
+  ctx.fillRect(0, 0, CONFIG.canvas.width, CONFIG.canvas.height);
+  rect(300, 130, 680, 220, panelFill(300, 130, 680, 220, '#9c622f', '#623719'), '#4c2b17', 22, 5);
+  text('魔王軍派遣センター', 640, 165, 44, '#ffd965', 'center', '900');
+  text('～ 魔物人材で勝利と利益を掴め！ ～', 640, 220, 22, '#fff2bd', 'center', '900');
+  text('敵を分析し、カードから採用し、卓上ボードへ配置して契約へ派遣しましょう。', 640, 282, 17, '#fff7de', 'center', '800');
+  button('start', '求人ボードを開く', 505, 400, 270, 58, { type: 'start' });
 }
 
 function drawHeader() {
-  text(`所持金: ${gameState.gold}g`, 26, 18, 22, CONFIG.ui.gold, 'left', '900');
-  text(`${gameState.day}日目 / ${CONFIG.game.maxDay}日`, 210, 20, 20, CONFIG.ui.text, 'left', '800');
-  text(`状態: ${modeLabel(gameState.mode)}`, 360, 22, 16, CONFIG.ui.muted);
-  text(gameState.message, 1250, 22, 16, CONFIG.ui.text, 'right');
+  drawRibbon(`Day ${gameState.day} / ${CONFIG.game.maxDay}　${modeLabel(gameState.mode)}`, 320, 12, 330, CONFIG.ui.purple, '📅');
+  rect(26, 10, 250, 40, panelFill(26, 10, 250, 40, '#5e3a1d', '#321e12'), '#8a5a2b', 12, 3);
+  text('魔王軍派遣センター', 44, 20, 21, '#ffe58b', 'left', '900');
+  rect(1060, 10, 190, 40, panelFill(1060, 10, 190, 40, '#fff0b8', '#f3b743'), '#8a5a2b', 12, 3);
+  text(`🪙 ${gameState.gold}G`, 1155, 18, 24, '#563414', 'center', '900');
+  text(gameState.message, 675, 48, 14, CONFIG.ui.ink, 'center', '800');
 }
 
 function drawTag(label, x, y, w, color = CONFIG.ui.blue) {
-  rect(x, y, w, 22, 'rgba(20, 12, 18, 0.82)', color);
-  text(label, x + w / 2, y + 4, 12, CONFIG.ui.text, 'center', '800');
+  drawPill(label, x, y, w, color);
 }
 
 function drawBar(label, value, maxValue, x, y, w, color) {
-  text(label, x, y, 13, CONFIG.ui.muted, 'left', '700');
-  rect(x + 126, y - 1, w, 14, '#140d18', '#3f2a37');
+  text(label, x, y, 13, CONFIG.ui.ink, 'left', '900');
+  rect(x + 126, y - 1, w, 14, '#f9e8c1', '#a97943', 8, 2);
   const fillW = Math.max(3, Math.min(w, (value / Math.max(1, maxValue)) * w));
   ctx.fillStyle = color;
-  ctx.fillRect(x + 128, y + 1, fillW - 4, 10);
+  ctx.fillRect(x + 128, y + 1, Math.max(2, fillW - 4), 10);
   text(label === '人間存在率' ? `${value}%` : threatStars(value), x + 126 + w + 8, y - 2, 13, color, 'left', '800');
 }
 
 function drawEnemyPanel() {
-  drawPanel('敵軍インテリジェンスレポート', 20, 58, 410, 252);
-  text('敵の構成分析と対策提案', 34, 86, 13, CONFIG.ui.muted);
+  drawPanel('敵軍インテリジェンス', 20, 64, 410, 246, { variant: 'parchment', banner: CONFIG.ui.red, icon: '⚔' });
   const enemies = [...gameState.enemyFormation.front, ...gameState.enemyFormation.back];
-  enemies.slice(0, 4).forEach((enemy, index) => drawUnit(enemy, 34 + index * 94, 108, 86, 82));
-  if (enemies.length > 4) text(`+${enemies.length - 4} 追加部隊`, 365, 170, 12, CONFIG.ui.gold, 'right', '800');
   const intel = enemyIntelligence();
-  drawBar('人間存在率', intel.humanPresence, 100, 34, 204, 92, CONFIG.ui.red);
-  drawBar('前線脅威', intel.frontlineThreat, 90, 34, 228, 92, CONFIG.ui.gold);
-  drawBar('後方火力', intel.backlineThreat, 80, 34, 252, 92, CONFIG.ui.blue);
-  drawBar('回復支援', intel.healingPresence * 28, 84, 34, 276, 92, intel.healingPresence ? CONFIG.ui.green : CONFIG.ui.muted);
-  rect(250, 204, 162, 86, '#1c121e', '#8a5a3d');
-  text('推奨カウンター', 262, 214, 13, CONFIG.ui.gold, 'left', '800');
-  intel.recommended.slice(0, 3).forEach((item, index) => text(`✦ ${item}`, 262, 238 + index * 18, 12, CONFIG.ui.text));
+  text(`Human Presence: ${intel.humanPresence >= 75 ? 'High' : intel.humanPresence >= 45 ? 'Medium' : 'Low'}`, 38, 96, 17, CONFIG.ui.red, 'left', '900');
+  enemies.slice(0, 4).forEach((enemy, index) => {
+    const x = 36 + index * 94;
+    rect(x, 122, 82, 72, '#fff7df', '#b8844b', 12, 2);
+    drawUnit(enemy, x + 6, 128, 70, 58);
+    drawPill(`×${enemies.filter((e) => e.enemyId === enemy.enemyId).length}`, x + 52, 126, 28, CONFIG.ui.red);
+  });
+  if (enemies.length > 4) text(`+${enemies.length - 4}`, 398, 150, 18, CONFIG.ui.gold, 'center', '900');
+  drawBar('人間存在率', intel.humanPresence, 100, 38, 212, 86, CONFIG.ui.red);
+  drawBar('前線脅威', intel.frontlineThreat, 90, 38, 236, 86, CONFIG.ui.orange);
+  drawBar('後方火力', intel.backlineThreat, 80, 38, 260, 86, CONFIG.ui.blue);
+  rect(256, 208, 156, 82, panelFill(256, 208, 156, 82, '#fff3cb', '#f5d9a3'), '#d85a4c', 14, 3);
+  text('おすすめ採用', 270, 218, 14, CONFIG.ui.red, 'left', '900');
+  intel.recommended.slice(0, 3).forEach((item, index) => text(`✦ ${item}`, 270, 242 + index * 17, 12, CONFIG.ui.ink, 'left', '800'));
 }
 
 function drawMarketPanel() {
-  drawPanel('モンスター応募者', 450, 58, 810, 252);
-  text('敵情報をもとに優秀な人材を採用（カードをクリック）', 674, 74, 13, CONFIG.ui.muted);
+  drawPanel('モンスター応募者（求人市場）', 450, 64, 810, 246, { variant: 'parchment', banner: CONFIG.ui.blue, icon: '☄' });
+  text('カードをクリックして採用：役割・特性を先に見て、数字はあとで確認。', 674, 96, 13, CONFIG.ui.muted, 'left', '800');
   gameState.market.forEach((card, index) => {
     const monster = CONFIG.monsters[card.speciesId];
     if (!monster) return;
     const x = 464 + index * 156;
-    const y = 96;
-    rect(x, y, 146, 196, card.sold ? '#2a2530' : CONFIG.ui.panel2, card.sold ? '#4d4652' : (monster.preferredRow === 'front' ? '#a87045' : '#4f7fa8'));
-    drawTag(monster.role, x + 8, y + 8, 92, monster.preferredRow === 'front' ? '#a87045' : '#4f7fa8');
-    text(card.sold ? '雇用済' : `${monster.hireCost}g`, x + 134, y + 10, 14, CONFIG.ui.gold, 'right', '900');
+    const y = 112;
+    const frameColor = monster.preferredRow === 'front' ? CONFIG.ui.green : CONFIG.ui.blue;
+    rect(x, y, 146, 180, panelFill(x, y, 146, 180, card.sold ? '#dcc9aa' : '#fff9e6', card.sold ? '#bfa988' : '#efd09b'), card.sold ? '#9b8464' : frameColor, 16, 3);
+    text(monster.name, x + 73, y + 10, 20, card.sold ? CONFIG.ui.muted : CONFIG.ui.ink, 'center', '900');
+    drawPill(monster.role, x + 14, y + 36, 118, frameColor);
+    rect(x + 14, y + 64, 118, 82, panelFill(x, y, 118, 82, '#dff2ff', '#bcdcf0'), '#9c6a35', 12, 2);
     const imageKey = `cards.${monster.id}.${monster.preferredRow}.idle`;
-    safeDrawImage(ctx, gameState.assets.images[imageKey], x + 14, y + 36, 118, 70, () => {
-      ctx.fillStyle = monster.color;
-      ctx.fillRect(x + 24, y + 42, 98, 58);
-      text(monster.icon, x + 73, y + 62, 18, '#111', 'center', '900');
-    });
-    text(monster.name, x + 10, y + 108, 18, card.sold ? CONFIG.ui.muted : CONFIG.ui.text, 'left', '900');
-    text(`専門: ${monster.specialty}`, x + 10, y + 132, 12, CONFIG.ui.blue, 'left', '800');
-    text(`対策価値 ${'★'.repeat(monsterCounterValue(monster))}${'☆'.repeat(5 - monsterCounterValue(monster))}`, x + 10, y + 150, 12, CONFIG.ui.gold, 'left', '800');
-    rect(x + 8, y + 168, 130, 20, '#efe2c8', '#b98a58');
-    text(monster.statement, x + 73, y + 171, 10, '#281a1a', 'center', '900');
-    gameState.input.cards.push({ x, y, w: 146, h: 196, action: { type: 'hire', id: card.id }, enabled: !card.sold });
+    safeDrawImage(ctx, gameState.assets.images[imageKey], x + 16, y + 60, 114, 88, () => drawMonsterFallback({ ...monster, speciesId: monster.id, color: monster.color }, x + 16, y + 58, 114, 90));
+    drawPill(card.sold ? '雇用済' : `${monster.hireCost}G`, x + 90, y + 154, 44, CONFIG.ui.gold, '#3b2517');
+    drawPill(monster.specialty, x + 12, y + 154, 72, CONFIG.ui.purple);
+    wrapText(monster.statement, x + 14, y + 181, 118, 13, 10, '#5d3a1f', '900');
+    gameState.input.cards.push({ x, y, w: 146, h: 180, action: { type: 'hire', id: card.id }, enabled: !card.sold });
   });
 }
 
 function drawFormationPanel() {
-  drawPanel('軍団編成 - 派遣スタッフ配置', 20, 330, 540, 430);
-  text('FRONTLINE / BACKLINEを明確に分け、役割に合わせて配置します。', 34, 360, 13, CONFIG.ui.muted);
+  drawPanel('自軍編成ボード', 20, 334, 540, 426, { variant: 'wood', banner: CONFIG.ui.blue, icon: '▦' });
+  text('卓上の配置枠へドラッグ感覚でクリック配置。空き枠も派遣準備中です。', 38, 366, 13, '#fff2bd', 'left', '800');
   const slotW = 136;
   ['front', 'back'].forEach((row, rowIndex) => {
-    const y = 392 + rowIndex * 108;
+    const y = 402 + rowIndex * 106;
     const rowTitle = row === 'front' ? 'FRONTLINE' : 'BACKLINE';
-    const rowSub = row === 'front' ? '盾・近接・被弾担当' : '遠距離・爆撃・支援担当';
-    rect(34, y, 108, 86, row === 'front' ? '#38251f' : '#1c2c3d', row === 'front' ? '#a87045' : '#4f7fa8');
-    text(rowTitle, 88, y + 16, 15, CONFIG.ui.gold, 'center', '900');
-    text(rowSub, 88, y + 45, 10, CONFIG.ui.muted, 'center', '700');
+    const rowSub = row === 'front' ? '盾・近接' : '遠距離・支援';
+    rect(34, y, 108, 82, panelFill(34, y, 108, 82, row === 'front' ? '#b76e36' : '#4a91c9', row === 'front' ? '#76411f' : '#266497'), '#f3d18a', 14, 3);
+    text(rowTitle, 88, y + 15, 15, '#fff7df', 'center', '900');
+    text(rowSub, 88, y + 44, 12, '#ffe9b8', 'center', '800');
     const max = row === 'front' ? CONFIG.formation.frontSlots : CONFIG.formation.backSlots;
     for (let slot = 0; slot < max; slot += 1) {
       const x = 152 + slot * (slotW + 8);
       const unit = livingArmy().find((u) => u && u.row === row && u.slot === slot);
-      rect(x, y, slotW, 86, '#1e1523', unit ? CONFIG.ui.line : '#4c3341');
-      drawTag(`${row === 'front' ? '前衛' : '後衛'} SLOT ${slot + 1}`, x + 8, y + 8, 82, row === 'front' ? '#a87045' : '#4f7fa8');
-      if (unit) drawUnit(unit, x + 6, y + 32, slotW - 12, 48, gameState.selectedUnitId === unit.id);
-      else text('空き採用枠', x + slotW / 2, y + 48, 13, CONFIG.ui.muted, 'center');
-      gameState.input.slots.push({ x, y, w: slotW, h: 86, action: { type: 'slot', row, slot }, enabled: true });
+      rect(x, y, slotW, 82, unit ? '#fff6df' : 'rgba(255,246,223,0.55)', unit ? '#f5c04f' : '#d8bd8d', 14, 3);
+      drawTag(`${row === 'front' ? '前衛' : '後衛'} ${slot + 1}`, x + 12, y + 8, 72, row === 'front' ? CONFIG.ui.orange : CONFIG.ui.blue);
+      if (unit) drawUnit(unit, x + 8, y + 34, slotW - 16, 42, gameState.selectedUnitId === unit.id);
+      else {
+        text('◇', x + slotW / 2, y + 36, 24, '#b69a74', 'center', '900');
+        text('空きスロット', x + slotW / 2, y + 59, 12, '#7c5a38', 'center', '800');
+      }
+      gameState.input.slots.push({ x, y, w: slotW, h: 82, action: { type: 'slot', row, slot }, enabled: true });
     }
   });
-  text('ベンチ（予備要員）', 34, 622, 15, CONFIG.ui.gold, 'left', '800');
+  rect(34, 618, 504, 82, panelFill(34, 618, 504, 82, '#f8e6c0', '#dcb982'), '#8a5a2b', 14, 3);
+  text('BENCH（控えメンバー）', 50, 630, 15, CONFIG.ui.ink, 'left', '900');
   livingArmy().filter((u) => !u.row).slice(0, 5).forEach((unit, index) => {
-    const x = 34 + index * 100;
-    const y = 648;
-    drawUnit(unit, x, y, 92, 54, gameState.selectedUnitId === unit.id);
-    gameState.input.cards.push({ x, y, w: 92, h: 54, action: { type: 'selectUnit', id: unit.id }, enabled: true });
+    const x = 48 + index * 96;
+    const y = 652;
+    drawUnit(unit, x, y, 88, 40, gameState.selectedUnitId === unit.id);
+    gameState.input.cards.push({ x, y, w: 88, h: 40, action: { type: 'selectUnit', id: unit.id }, enabled: true });
   });
   livingArmy().filter((u) => u.row).forEach((unit) => {
     const rowIndex = unit.row === 'front' ? 0 : 1;
-    const x = 152 + (unit.slot || 0) * (slotW + 8) + 6;
-    const y = 392 + rowIndex * 108 + 32;
-    gameState.input.cards.push({ x, y, w: slotW - 12, h: 48, action: { type: 'selectUnit', id: unit.id }, enabled: true });
+    const x = 152 + (unit.slot || 0) * (slotW + 8) + 8;
+    const y = 402 + rowIndex * 106 + 34;
+    gameState.input.cards.push({ x, y, w: slotW - 16, h: 42, action: { type: 'selectUnit', id: unit.id }, enabled: true });
   });
   button('bench', '控えへ戻す', 34, 714, 150, 34, { type: 'bench' }, Boolean(gameState.selectedUnitId) && gameState.mode === 'planning');
-  button('battle', '契約へ派遣', 388, 714, 150, 34, { type: 'battle' }, gameState.mode === 'planning' && deployedArmy().length > 0);
+  button('battle', '⚔ 派遣開始！', 370, 714, 168, 34, { type: 'battle' }, gameState.mode === 'planning' && deployedArmy().length > 0);
 }
 
 function drawPredictionPanel() {
-  drawPanel('契約予測（戦闘前シミュレーション）', 580, 330, 680, 120);
+  drawPanel('契約予測', 580, 334, 680, 116, { variant: 'contract', banner: CONFIG.ui.blue, icon: '📜' });
   const prediction = contractPrediction();
-  text('予想勝率', 610, 370, 15, CONFIG.ui.muted, 'left', '800');
-  text(`${prediction.chance}%`, 610, 392, 34, prediction.chance >= 60 ? CONFIG.ui.green : CONFIG.ui.red, 'left', '900');
-  text('予想損耗', 790, 370, 15, CONFIG.ui.muted, 'left', '800');
-  text(`${prediction.expectedDead}体`, 790, 398, 28, CONFIG.ui.text, 'left', '900');
-  text('予想利益', 960, 370, 15, CONFIG.ui.muted, 'left', '800');
-  text(`${prediction.projectedProfit >= 0 ? '+' : ''}${prediction.projectedProfit}g`, 960, 398, 28, prediction.projectedProfit >= 0 ? CONFIG.ui.green : CONFIG.ui.red, 'left', '900');
-  text(prediction.summary, 1118, 386, 13, CONFIG.ui.muted, 'left', '700');
+  const items = [
+    ['⚔', '勝率', `${prediction.chance}%`, prediction.chance >= 60 ? CONFIG.ui.green : CONFIG.ui.red],
+    ['☠', '損耗', `${prediction.expectedDead}体`, CONFIG.ui.ink],
+    ['🪙', '利益', `${prediction.projectedProfit >= 0 ? '+' : ''}${prediction.projectedProfit}G`, prediction.projectedProfit >= 0 ? CONFIG.ui.green : CONFIG.ui.red],
+  ];
+  items.forEach(([icon, label, value, color], index) => {
+    const x = 604 + index * 176;
+    rect(x, 374, 160, 56, '#fffaf0', '#d4a15e', 12, 2);
+    text(icon, x + 20, 387, 24, color, 'center', '900');
+    text(label, x + 48, 382, 13, CONFIG.ui.muted, 'left', '900');
+    text(value, x + 48, 398, 26, color, 'left', '900');
+  });
+  rect(1130, 374, 108, 56, '#fff0cf', '#d4a15e', 12, 2);
+  wrapText(prediction.summary, 1142, 386, 84, 14, 11, CONFIG.ui.ink, '800');
 }
 
 function drawReportPanel() {
-  drawPanel('戦闘結果 - 採用評価', 580, 470, 300, 290);
+  drawPanel('前回の戦闘結果', 580, 474, 300, 286, { variant: 'celebration', banner: CONFIG.ui.purple, icon: '★' });
   if (gameState.report) {
     const evaluation = reportEvaluation();
-    text(evaluation.stars, 604, 512, 28, CONFIG.ui.gold, 'left', '900');
-    text(evaluation.label, 604, 548, 18, gameState.report.victory ? CONFIG.ui.green : CONFIG.ui.red, 'left', '900');
-    text(`損耗: ${gameState.report.dead.length ? gameState.report.dead.join('、') : 'なし'}`, 604, 586, 14, CONFIG.ui.text);
-    text(`利益: ${gameState.economy.profit >= 0 ? '+' : ''}${gameState.economy.profit}g`, 604, 614, 18, gameState.economy.profit >= 0 ? CONFIG.ui.green : CONFIG.ui.red, 'left', '900');
-    const summary = gameState.report.victory ? '敵情報に基づく人員配置が契約成功につながりました。' : '採用計画が敵戦力を下回りました。対策価値を重視しましょう。';
-    text(summary, 604, 650, 13, CONFIG.ui.muted);
+    text('★★★★★ Hiring Evaluation', 604, 510, 18, '#8a4b18', 'left', '900');
+    text(evaluation.stars, 604, 540, 30, '#ffcf33', 'left', '900');
+    drawPill(gameState.report.victory ? '契約成功' : '契約失敗', 604, 580, 112, gameState.report.victory ? CONFIG.ui.green : CONFIG.ui.red);
+    text(`Profit ${gameState.economy.profit >= 0 ? '+' : ''}${gameState.economy.profit}G`, 604, 616, 24, gameState.economy.profit >= 0 ? CONFIG.ui.green : CONFIG.ui.red, 'left', '900');
+    text(`損耗: ${gameState.report.dead.length ? gameState.report.dead.join('、') : 'なし'}`, 604, 650, 13, CONFIG.ui.ink, 'left', '800');
+    wrapText(gameState.report.victory ? '完璧な採用だったよ！損耗ゼロなら大勝利！' : '対策カードを優先して次の契約へ備えよう。', 604, 682, 248, 16, 13, '#5d3a1f', '900');
   } else {
-    text(gameState.mode === 'battle' ? '契約履行中。評価を集計しています...' : '戦闘後に採用評価を表示します。', 604, 512, 16, CONFIG.ui.muted);
+    text('戦闘後に採用評価を表示', 604, 530, 18, '#8a4b18', 'left', '900');
+    text('★★★★★', 604, 568, 28, '#d6ba7c', 'left', '900');
   }
 }
 
 function drawMvpPanel() {
-  drawPanel('本日の優秀社員', 900, 470, 180, 290);
+  drawPanel('MVP Employee', 900, 474, 180, 286, { variant: 'parchment', banner: CONFIG.ui.green, icon: '👑' });
   const mvp = gameState.report ? employeeOfTheDay() : null;
-  text('Employee of the Day', 916, 504, 13, CONFIG.ui.gold, 'left', '800');
   if (mvp) {
-    text(mvp.name, 916, 536, 22, CONFIG.ui.text, 'left', '900');
-    text(`撃破数: ${mvp.kills}`, 916, 576, 16, CONFIG.ui.gold, 'left', '800');
-    text(mvp.contribution, 916, 606, 13, CONFIG.ui.muted);
-    text('採用台帳に金印を押しました。', 916, 682, 12, CONFIG.ui.gold);
+    const base = CONFIG.monsters[mvp.speciesId] || {};
+    rect(920, 520, 140, 118, panelFill(920, 520, 140, 118, '#dff2ff', '#bddded'), '#9c6a35', 14, 2);
+    drawMonsterFallback({ ...mvp, color: mvp.color || base.color }, 924, 514, 132, 124);
+    text(mvp.name, 990, 648, 20, CONFIG.ui.ink, 'center', '900');
+    drawPill(`撃破 ${mvp.kills}`, 932, 678, 96, CONFIG.ui.gold, '#3b2517');
+    wrapText(mvp.contribution, 920, 712, 136, 15, 12, CONFIG.ui.muted, '800');
   } else {
-    text('戦闘後にMVPを発表', 916, 536, 15, CONFIG.ui.muted);
+    text('戦闘後に発表', 990, 536, 16, CONFIG.ui.muted, 'center', '900');
+    text('👑', 990, 582, 44, CONFIG.ui.gold, 'center', '900');
   }
 }
 
 function drawEconomyPanel() {
-  drawPanel('経済サマリー', 1100, 470, 160, 290);
-  text('所持金', 1116, 510, 13, CONFIG.ui.muted, 'left', '800');
-  text(`${gameState.gold}g`, 1116, 532, 24, CONFIG.ui.gold, 'left', '900');
-  text(`報酬 ${gameState.economy.reward}g`, 1116, 582, 15, CONFIG.ui.gold, 'left', '800');
-  text(`補填 -${gameState.economy.replacementCosts}g`, 1116, 612, 15, CONFIG.ui.red, 'left', '800');
+  drawPanel('経済サマリー', 1100, 474, 160, 286, { variant: 'ledger', banner: CONFIG.ui.orange, icon: '🪙' });
+  text('所持ゴールド', 1118, 512, 13, '#6a4327', 'left', '900');
+  text(`${gameState.gold}G`, 1118, 534, 26, '#8a4b18', 'left', '900');
+  rect(1118, 580, 124, 82, '#fff8df', '#d4a15e', 12, 2);
+  text(`報酬 +${gameState.economy.reward}G`, 1130, 594, 13, CONFIG.ui.green, 'left', '900');
+  text(`補填 -${gameState.economy.replacementCosts}G`, 1130, 622, 13, CONFIG.ui.red, 'left', '900');
   const profitColor = gameState.economy.profit >= 0 ? CONFIG.ui.green : CONFIG.ui.red;
-  text(`純利益`, 1116, 650, 13, CONFIG.ui.muted, 'left', '800');
-  text(`${gameState.economy.profit >= 0 ? '+' : ''}${gameState.economy.profit}g`, 1116, 672, 24, profitColor, 'left', '900');
-  if (gameState.mode === 'report' && gameState.phase === 'playing') button('continue', '翌日へ', 1116, 714, 124, 34, { type: 'continue' });
-  if (gameState.phase === 'gameover') button('restart', '再開', 1116, 714, 124, 34, { type: 'restart' });
+  text('純利益', 1118, 678, 13, '#6a4327', 'left', '900');
+  text(`${gameState.economy.profit >= 0 ? '+' : ''}${gameState.economy.profit}G`, 1118, 698, 27, profitColor, 'left', '900');
+  if (gameState.mode === 'report' && gameState.phase === 'playing') button('continue', '翌日へ', 1118, 728, 124, 26, { type: 'continue' });
+  if (gameState.phase === 'gameover') button('restart', '再開', 1118, 728, 124, 26, { type: 'restart' });
 }
 
 function render() {
@@ -812,8 +922,13 @@ function render() {
   gameState.input.cards = [];
   gameState.input.slots = [];
   ctx.clearRect(0, 0, CONFIG.canvas.width, CONFIG.canvas.height);
-  ctx.fillStyle = '#170f1b';
+  ctx.fillStyle = panelFill(0, 0, CONFIG.canvas.width, CONFIG.canvas.height, '#9ed8f6', '#f4cf92');
   ctx.fillRect(0, 0, CONFIG.canvas.width, CONFIG.canvas.height);
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.35)';
+  ctx.beginPath(); ctx.arc(112, 82, 38, 0, Math.PI * 2); ctx.arc(156, 76, 48, 0, Math.PI * 2); ctx.arc(206, 88, 34, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#8fc36d';
+  ctx.beginPath(); ctx.moveTo(0, 820); ctx.lineTo(0, 760); ctx.quadraticCurveTo(360, 704, 720, 760); ctx.quadraticCurveTo(1020, 804, 1280, 746); ctx.lineTo(1280, 820); ctx.closePath(); ctx.fill();
+  rect(14, 54, 1252, 718, 'rgba(255, 246, 223, 0.34)', 'rgba(138, 90, 43, 0.28)', 18, 2);
   if (gameState.phase === 'start') {
     drawStart();
     return;
