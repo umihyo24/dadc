@@ -3,6 +3,7 @@
 const CONFIG = Object.freeze({
   canvas: { width: 1280, height: 820, fps: 60 },
   game: { startingGold: 120, baseMarketSize: 5, baseContractSlots: 3, winRank: 'A' },
+  BATTLE: { MIN_DURATION_MS: 5000 },
   formation: { frontSlots: 3, backSlots: 3 },
   economy: { replacementMultiplier: 2 },
   combat: {
@@ -122,7 +123,7 @@ const gameState = {
   phase: 'start',
   day: 1,
   gold: CONFIG.game.startingGold,
-  mode: 'contracts',
+  mode: 'contractSelect',
   market: [],
   army: [],
   contractOffers: [],
@@ -262,7 +263,7 @@ function prepareDay() {
   gameState.currentContract = null;
   gameState.market = [];
   gameState.enemyFormation = { front: [], back: [] };
-  gameState.mode = 'contracts';
+  gameState.mode = 'contractSelect';
   gameState.selectedUnitId = null;
   gameState.selectedMergeId = null;
   gameState.battle = null;
@@ -272,13 +273,13 @@ function prepareDay() {
 }
 
 function selectContract(contractId) {
-  if (gameState.phase !== 'playing' || gameState.mode !== 'contracts') return;
+  if (gameState.phase !== 'playing' || gameState.mode !== 'contractSelect') return;
   const contract = gameState.contractOffers.find((item) => item.id === contractId);
   if (!contract) return;
   gameState.currentContract = contract;
   gameState.market = generateMarket(contract);
   setEnemyFormation(contract);
-  gameState.mode = 'planning';
+  gameState.mode = 'formation';
   gameState.economy = { reward: contract.reward, bonusReward: contract.bonusReward, replacementCosts: 0, profit: 0, reputationGain: 0, bonusAchieved: false };
   gameState.message = `${contract.title}を受注。敵情報とボーナス条件を見て応募者を採用しましょう。`;
 }
@@ -318,7 +319,7 @@ function startGame() {
 }
 
 function hire(marketId) {
-  if (gameState.phase !== 'playing' || gameState.mode !== 'planning') return;
+  if (gameState.phase !== 'playing' || gameState.mode !== 'formation') return;
   const card = gameState.market.find((item) => item && item.id === marketId);
   const base = card ? CONFIG.monsters[card.speciesId] : null;
   if (!card || card.sold || !base) return;
@@ -336,7 +337,7 @@ function hire(marketId) {
 
 function selectUnit(unitId) {
   const unit = byId(unitId);
-  if (!unit || gameState.mode !== 'planning') return;
+  if (!unit || gameState.mode !== 'formation') return;
   if (gameState.selectedMergeId && gameState.selectedMergeId !== unitId) {
     tryMerge(gameState.selectedMergeId, unitId);
     return;
@@ -369,7 +370,7 @@ function tryMerge(firstId, secondId) {
 }
 
 function assignSlot(row, slot) {
-  if (gameState.mode !== 'planning') return;
+  if (gameState.mode !== 'formation') return;
   const unit = byId(gameState.selectedUnitId);
   if (!unit || !['front', 'back'].includes(row) || !Number.isInteger(slot)) return;
   const max = row === 'front' ? CONFIG.formation.frontSlots : CONFIG.formation.backSlots;
@@ -387,7 +388,7 @@ function assignSlot(row, slot) {
 
 function benchSelected() {
   const unit = byId(gameState.selectedUnitId);
-  if (!unit || gameState.mode !== 'planning') return;
+  if (!unit || gameState.mode !== 'formation') return;
   unit.row = null;
   unit.slot = null;
   gameState.message = `${unit.name}を控えに戻しました。`;
@@ -410,7 +411,7 @@ function normalizeFormation() {
 }
 
 function startBattle() {
-  if (gameState.mode !== 'planning') return;
+  if (gameState.mode !== 'formation') return;
   normalizeFormation();
   if (deployedArmy().length <= 0) {
     gameState.message = '戦闘前に最低1体のモンスターを配置してください。';
@@ -429,6 +430,8 @@ function startBattle() {
     stats: {},
     effects: [],
     completed: false,
+    victory: null,
+    resolvedAtMs: null,
   };
   [...army, ...enemies].forEach((unit) => {
     if (!unit) return;
@@ -651,6 +654,7 @@ function battleTick(deltaMs = CONFIG.combat.tickMs) {
   battle.tick += 1;
   battle.timeMs += deltaMs;
   updateBattleEffects(deltaMs);
+  if (battle.completed) return;
   const actors = [
     ...getCombatants('army').map((u) => ({ side: 'army', unit: u })),
     ...getCombatants('enemy').map((u) => ({ side: 'enemy', unit: u })),
@@ -671,7 +675,7 @@ function battleTick(deltaMs = CONFIG.combat.tickMs) {
   safeCleanup();
   const armyAlive = getCombatants('army').length;
   const enemyAlive = getCombatants('enemy').length;
-  if (enemyAlive <= 0 || armyAlive <= 0 || battle.timeMs >= CONFIG.combat.battleMaxMs) finishBattle(enemyAlive <= 0 && armyAlive > 0);
+  if (enemyAlive <= 0 || armyAlive <= 0 || battle.timeMs >= CONFIG.combat.battleMaxMs) resolveBattle(enemyAlive <= 0 && armyAlive > 0);
 }
 
 function allEnemies() {
@@ -795,7 +799,7 @@ function gradeFromReport() {
 }
 
 function purchaseInvestment(id) {
-  if (gameState.phase !== 'playing' || gameState.mode !== 'contracts') return;
+  if (gameState.phase !== 'playing' || gameState.mode !== 'contractSelect') return;
   const investment = CONFIG.investments.find((item) => item.id === id);
   if (!investment) return;
   const level = gameState.investments[id] || 0;
@@ -815,13 +819,23 @@ function purchaseInvestment(id) {
 }
 
 function cycleSpeciesPreference() {
-  if (!gameState.investments.agencyPartnership || gameState.mode !== 'contracts') return;
+  if (!gameState.investments.agencyPartnership || gameState.mode !== 'contractSelect') return;
   const species = Object.keys(CONFIG.monsters);
   const current = species.indexOf(gameState.speciesPreference);
   gameState.speciesPreference = species[(current + 1) % species.length];
   gameState.message = `提携エージェンシーの優先種族を${CONFIG.monsters[gameState.speciesPreference].name}に変更しました。`;
 }
 
+
+function resolveBattle(victory) {
+  const battle = gameState.battle;
+  if (!battle || battle.completed) return;
+  battle.completed = true;
+  battle.victory = Boolean(victory);
+  battle.resolvedAtMs = battle.timeMs;
+  pushBattleLog('戦況は収束。契約レポートを集計中…');
+  gameState.message = '戦闘観測中です。最低表示時間が終わるまで、最終レポートは伏せられています。';
+}
 
 function finishBattle(victory) {
   if (gameState.battle && gameState.battle.stats) {
@@ -856,7 +870,7 @@ function finishBattle(victory) {
   gameState.report.grade = gradeFromReport();
   gameState.army = livingArmy().map((unit) => ({ ...unit, hp: unit.maxHp, row: unit.row, slot: unit.slot }));
   normalizeFormation();
-  gameState.mode = 'report';
+  gameState.mode = 'result';
   gameState.message = victory ? '契約評価が届きました。利益・信用・投資余力を確認してください。' : '契約失敗。信用は増えません。採用判断を見直しましょう。';
   if (gameState.currentContract && gameState.currentContract.heroContract && victory) {
     gameState.phase = 'gameover';
@@ -871,7 +885,7 @@ function finishBattle(victory) {
 }
 
 function continueDay() {
-  if (gameState.phase !== 'playing' || gameState.mode !== 'report') return;
+  if (gameState.phase !== 'playing' || gameState.mode !== 'result') return;
   gameState.day += 1;
   prepareDay();
 }
@@ -902,13 +916,16 @@ function update(deltaMs) {
   safeCleanup();
   const actions = Array.isArray(gameState.input.actions) ? gameState.input.actions.splice(0) : [];
   actions.forEach(processAction);
-  if (gameState.phase === 'playing' && gameState.gold <= 0 && gameState.mode !== 'report') {
+  if (gameState.phase === 'playing' && gameState.gold <= 0 && gameState.mode !== 'result' && gameState.mode !== 'battle') {
     gameState.phase = 'gameover';
     gameState.message = '敗北: 運転資金が尽きました。';
   }
   if (gameState.phase === 'playing' && gameState.mode === 'battle' && gameState.battle) {
     gameState.battle.elapsed += deltaMs;
     battleTick(deltaMs);
+    if (gameState.battle.completed && gameState.battle.timeMs >= CONFIG.BATTLE.MIN_DURATION_MS) {
+      finishBattle(gameState.battle.victory);
+    }
   }
 }
 
@@ -1059,7 +1076,7 @@ function rowLabel(row) {
 }
 
 function modeLabel(mode) {
-  const labels = { contracts: '契約選定', planning: '採用・編成', battle: '自動戦闘', report: '契約評価' };
+  const labels = { contractSelect: '契約選定', recruit: '採用', formation: '採用・編成', battle: '戦闘観測', result: '契約結果' };
   return labels[mode] || '開始前';
 }
 
@@ -1157,7 +1174,7 @@ function drawEnemyPanel() {
 }
 
 function drawMarketPanel() {
-  if (gameState.mode === 'contracts') {
+  if (gameState.mode === 'contractSelect') {
     drawPanel('契約オファー / Company Investments', 450, 64, 810, 246, { variant: 'contract', banner: CONFIG.ui.purple, icon: '📜' });
     text('案件を選ぶ前に、利益を使って採用・契約の選択肢だけを拡張できます（戦闘ボーナスなし）。', 476, 96, 13, CONFIG.ui.muted, 'left', '800');
     gameState.contractOffers.forEach((contract, index) => {
@@ -1247,8 +1264,8 @@ function drawFormationPanel() {
     const y = 402 + rowIndex * 106 + 34;
     gameState.input.cards.push({ x, y, w: slotW - 16, h: 42, action: { type: 'selectUnit', id: unit.id }, enabled: true });
   });
-  button('bench', '控えへ戻す', 34, 714, 150, 34, { type: 'bench' }, Boolean(gameState.selectedUnitId) && gameState.mode === 'planning');
-  button('battle', '⚔ 派遣開始！', 370, 714, 168, 34, { type: 'battle' }, gameState.mode === 'planning' && deployedArmy().length > 0);
+  button('bench', '控えへ戻す', 34, 714, 150, 34, { type: 'bench' }, Boolean(gameState.selectedUnitId) && gameState.mode === 'formation');
+  button('battle', '⚔ 派遣開始！', 370, 714, 168, 34, { type: 'battle' }, gameState.mode === 'formation' && deployedArmy().length > 0);
 }
 
 function drawPredictionPanel() {
@@ -1322,7 +1339,7 @@ function drawEconomyPanel() {
   const profitColor = gameState.economy.profit >= 0 ? CONFIG.ui.green : CONFIG.ui.red;
   text('今回純利益', 1118, 708, 13, '#6a4327', 'left', '900');
   text(`${gameState.economy.profit >= 0 ? '+' : ''}${gameState.economy.profit}G`, 1118, 728, 23, profitColor, 'left', '900');
-  if (gameState.mode === 'report' && gameState.phase === 'playing') button('continue', '次の契約へ', 1118, 752, 124, 26, { type: 'continue' });
+  if (gameState.mode === 'result' && gameState.phase === 'playing') button('continue', '次の契約へ', 1118, 752, 124, 26, { type: 'continue' });
   if (gameState.phase === 'gameover') button('restart', '再開', 1118, 752, 124, 26, { type: 'restart' });
 }
 
@@ -1421,25 +1438,76 @@ function drawBattleLogPanel() {
   text('… 戦闘中 …', 1129, 642, 13, CONFIG.ui.muted, 'center', '900');
 }
 
+
+function drawResultScene() {
+  drawHeader();
+  const evaluation = reportEvaluation() || { stars: '☆☆☆☆☆', label: '未評価' };
+  const report = gameState.report || { victory: false, grade: '未評価', dead: [] };
+  const mvp = employeeOfTheDay();
+  const profitColor = gameState.economy.profit >= 0 ? CONFIG.ui.green : CONFIG.ui.red;
+
+  drawPanel('Post-Battle Contract Report', 120, 86, 1040, 626, { variant: 'celebration', banner: report.victory ? CONFIG.ui.green : CONFIG.ui.red, icon: '📋' });
+  text(report.contractTitle || '未選択契約', 160, 128, 26, CONFIG.ui.ink, 'left', '900');
+  drawPill(report.victory ? 'Contract Success' : 'Contract Failure', 160, 172, 170, report.victory ? CONFIG.ui.green : CONFIG.ui.red);
+  text('Contract Evaluation Grade', 370, 166, 14, CONFIG.ui.muted, 'left', '900');
+  text(`${evaluation.stars} Grade ${report.grade}`, 370, 188, 26, '#ffcf33', 'left', '900');
+  text(`Hiring Evaluation: ${evaluation.label}`, 160, 224, 16, CONFIG.ui.ink, 'left', '900');
+
+  drawPanel('Contract Settlement', 160, 270, 450, 306, { variant: 'ledger', banner: CONFIG.ui.orange, icon: '🪙' });
+  const rows = [
+    ['Base Reward', `${gameState.economy.reward}G`, CONFIG.ui.gold],
+    ['Bonus Reward', `${gameState.economy.bonusReward}G`, gameState.economy.bonusAchieved ? CONFIG.ui.purple : CONFIG.ui.muted],
+    ['Replacement Costs', `-${gameState.economy.replacementCosts}G`, CONFIG.ui.red],
+    ['Profit', `${gameState.economy.profit >= 0 ? '+' : ''}${gameState.economy.profit}G`, profitColor],
+    ['Reputation Gain', `+${gameState.economy.reputationGain}`, CONFIG.ui.purple],
+    ['Company Rank', gameState.company.rank, CONFIG.ui.blue],
+  ];
+  rows.forEach(([label, value, color], index) => {
+    const y = 318 + index * 38;
+    text(label, 192, y, 17, CONFIG.ui.muted, 'left', '900');
+    text(value, 530, y - 4, 23, color, 'right', '900');
+  });
+  text(`損耗: ${report.dead.length ? report.dead.join('、') : 'なし'}`, 192, 550, 14, CONFIG.ui.ink, 'left', '800');
+
+  drawPanel('MVP Employee', 650, 270, 430, 306, { variant: 'parchment', banner: CONFIG.ui.green, icon: '👑' });
+  if (mvp) {
+    const base = CONFIG.monsters[mvp.speciesId] || {};
+    rect(686, 318, 160, 148, panelFill(686, 318, 160, 148, '#dff2ff', '#bddded'), '#9c6a35', 14, 2);
+    drawMonsterFallback({ ...mvp, color: mvp.color || base.color }, 698, 312, 136, 154);
+    text(mvp.name, 884, 318, 25, CONFIG.ui.ink, 'left', '900');
+    drawPill(`撃破 ${mvp.kills}`, 884, 362, 86, CONFIG.ui.gold, '#3b2517');
+    drawPill(`与ダメ ${mvp.damageDealt}`, 984, 362, 86, CONFIG.ui.red);
+    text(`回復 ${mvp.healingDone || 0}`, 884, 408, 16, CONFIG.ui.green, 'left', '900');
+    wrapText(mvp.reason || mvp.contribution, 884, 442, 156, 18, 13, CONFIG.ui.muted, '900');
+  }
+
+  button('continue', '次の契約へ', 482, 626, 316, 46, { type: 'continue' }, gameState.phase === 'playing');
+  if (gameState.phase === 'gameover') button('restart', '最初から再開', 836, 626, 180, 46, { type: 'restart' }, true);
+}
+
 function drawBattleScene() {
   drawHeader();
-  const contract = gameState.currentContract;
-  drawPanel('契約情報', 24, 72, 300, 160, { variant: 'parchment', banner: CONFIG.ui.blue, icon: '🛡' });
-  text(contract ? contract.title : '未選択契約', 48, 110, 16, CONFIG.ui.ink, 'left', '900');
-  text(`報酬: ${contract ? contract.reward : 0}G`, 48, 140, 20, CONFIG.ui.gold, 'left', '900');
-  text(`ボーナス: ${contract ? contract.bonusObjective : '-'}`, 48, 170, 14, CONFIG.ui.green, 'left', '900');
-  text(`難易度: ${contract ? '★'.repeat(contract.difficulty) : '-'}`, 48, 198, 16, CONFIG.ui.red, 'left', '900');
+  const battleEnemies = gameState.battle && Array.isArray(gameState.battle.enemies) ? gameState.battle.enemies : [];
+  const casualties = gameState.army.filter((unit) => unit && unit.alive === false).length;
+  const livingAllies = getCombatants('army').length;
+  const livingEnemies = getCombatants('enemy').length;
+  const elapsed = Math.floor((gameState.battle?.timeMs || 0) / 1000);
+  const minimumSeconds = Math.ceil(CONFIG.BATTLE.MIN_DURATION_MS / 1000);
 
-  drawPanel('敵インテリジェンス', 946, 72, 308, 160, { variant: 'parchment', banner: CONFIG.ui.red, icon: '⚔' });
-  const intel = enemyIntelligence();
-  text(`人間率: ${intel.humanPresence >= 75 ? '高' : '中'} (${intel.humanPresence}%)`, 970, 110, 18, CONFIG.ui.red, 'left', '900');
-  text(`前衛耐久: ${threatStars(intel.frontlineThreat, 90)}`, 970, 140, 15, CONFIG.ui.ink, 'left', '900');
-  text(`後衛火力: ${threatStars(intel.backlineThreat, 80)}`, 970, 168, 15, CONFIG.ui.ink, 'left', '900');
-  text(`回復能力: ${'✚'.repeat(Math.max(1, intel.healingPresence))}`, 970, 196, 15, CONFIG.ui.green, 'left', '900');
+  drawPanel('Live Battle Observation', 24, 72, 300, 160, { variant: 'parchment', banner: CONFIG.ui.blue, icon: '👁' });
+  text('経過時間', 48, 106, 14, CONFIG.ui.muted, 'left', '900');
+  text(`${String(Math.floor(elapsed / 60)).padStart(2, '0')}:${String(elapsed % 60).padStart(2, '0')}`, 48, 128, 34, CONFIG.ui.ink, 'left', '900');
+  text(`最低観測 ${minimumSeconds}秒`, 210, 138, 14, CONFIG.ui.blue, 'left', '900');
+  text(`現在損耗: ${casualties}体`, 48, 178, 18, casualties > 0 ? CONFIG.ui.red : CONFIG.ui.green, 'left', '900');
+  text(gameState.battle?.completed ? '戦況収束・集計待機' : '交戦中・結果未確定表示', 48, 204, 14, CONFIG.ui.purple, 'left', '900');
+
+  drawPanel('Live Unit Counts', 946, 72, 308, 160, { variant: 'parchment', banner: CONFIG.ui.red, icon: '☠' });
+  text(`生存味方: ${livingAllies}体`, 970, 112, 24, CONFIG.ui.blue, 'left', '900');
+  text(`生存敵: ${livingEnemies}体`, 970, 152, 24, CONFIG.ui.red, 'left', '900');
+  text('HPバーとログだけで戦況を観測します。', 970, 196, 13, CONFIG.ui.muted, 'left', '800');
 
   rect(344, 72, 602, 92, panelFill(344, 72, 602, 92, '#201c18', '#11100f'), '#8a5a2b', 18, 4);
-  text('戦闘中…', 645, 88, 32, CONFIG.ui.trait, 'center', '900');
-  const elapsed = Math.floor((gameState.battle?.timeMs || 0) / 1000);
+  text('戦闘観測中…', 645, 88, 32, CONFIG.ui.trait, 'center', '900');
   text(`${String(Math.floor(elapsed / 60)).padStart(2, '0')}:${String(elapsed % 60).padStart(2, '0')}`, 645, 124, 32, '#fff7de', 'center', '900');
 
   rect(34, 246, 1200, 428, panelFill(34, 246, 1200, 428, '#9bd374', '#c9965d'), '#5f4328', 20, 4);
@@ -1453,17 +1521,13 @@ function drawBattleScene() {
   text('敵軍 FRONTLINE', 846, 252, 18, '#76251f', 'center', '900');
   text('敵軍 BACKLINE', 976, 472, 18, '#76251f', 'center', '900');
 
-  const battleEnemies = gameState.battle && Array.isArray(gameState.battle.enemies) ? gameState.battle.enemies : [];
   [...gameState.army.filter((unit) => unit && unit.row), ...battleEnemies].filter(Boolean).sort((a, b) => (a.row === b.row ? (a.slot || 0) - (b.slot || 0) : (a.row === 'back' ? 1 : -1))).forEach(drawBattleToken);
   (gameState.battle?.effects || []).forEach(drawBattleEffect);
 
-  const dead = gameState.army.filter((unit) => unit && unit.alive === false).length;
-  const armyPower = deployedArmy().reduce((sum, unit) => sum + (unit.attack || 0) + (unit.maxHp || 0), 0);
-  const enemyPower = battleEnemies.reduce((sum, unit) => sum + (unit.attack || 0) + (unit.maxHp || 0), 0);
   rect(42, 700, 500, 52, panelFill(42, 700, 500, 52, '#164b75', '#0d2c45'), '#8a5a2b', 14, 3);
-  text(`自軍　総戦力:${armyPower}　損耗:${dead}体`, 66, 716, 22, '#fff7de', 'left', '900');
+  text(`自軍　生存:${livingAllies}体　現在損耗:${casualties}体`, 66, 716, 22, '#fff7de', 'left', '900');
   rect(738, 700, 500, 52, panelFill(738, 700, 500, 52, '#8c2e25', '#4a1612'), '#8a5a2b', 14, 3);
-  text(`敵軍　総戦力:${enemyPower}　生存:${getCombatants('enemy').length}体`, 762, 716, 22, '#fff7de', 'left', '900');
+  text(`敵軍　生存:${livingEnemies}体`, 762, 716, 22, '#fff7de', 'left', '900');
   text('VS', 640, 704, 42, CONFIG.ui.trait, 'center', '900');
   drawBattleLogPanel();
 }
@@ -1489,14 +1553,17 @@ function render() {
     drawBattleScene();
     return;
   }
+  if (gameState.mode === 'result') {
+    drawResultScene();
+    return;
+  }
   drawHeader();
   drawEnemyPanel();
   drawMarketPanel();
-  drawFormationPanel();
-  drawPredictionPanel();
-  drawReportPanel();
-  drawMvpPanel();
-  drawEconomyPanel();
+  if (gameState.mode === 'formation' || gameState.mode === 'recruit') {
+    drawFormationPanel();
+    drawPredictionPanel();
+  }
 }
 
 function queueCanvasAction(event) {
