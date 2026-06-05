@@ -1,53 +1,98 @@
 # Demon Army Dispatch Center
 
-A browser-based fantasy recruitment agency game where the player runs a monster staffing company for the Demon King's Army.
+A browser-based contract dispatch management game where the player runs a monster staffing company for the Demon King's Army.
 
-The player is not a battlefield commander. The player is a recruitment and dispatch manager who chooses contracts, studies fully visible enemy intelligence, hires the right monster individuals, deploys a formation, and reviews whether the contract was profitable.
+The player does **not** build the strongest army. The core question is:
 
-## Design Pillars
+> Who should I dispatch for this contract, and how cheaply can I complete it?
 
-1. **Enemy Intelligence** - all enemy information is visible before deployment.
-2. **Recruitment** - the core decision is selecting the correct personnel for the contract.
-3. **Contracts** - every automatic battle starts from a contract offer with reward, risk, enemy composition, bonus objective, and recommended counter.
-4. **Profit** - a win can still be bad business if replacement costs erase revenue.
-5. **Reputation** - profitable, low-casualty, bonus-completing work raises company rank from E to S.
+## Core Decisions
+
+Each contract asks the player to balance:
+
+- contract budget
+- enemy composition
+- monster wage / labor cost
+- expected casualties and replacement costs
+- short-term profit
+- long-term reputation
+- bonus objectives
+
+Winning is not enough. A successful contract can still be bad business if the dispatched team was too expensive.
+
+## Contract Types
+
+- **Commercial Contract**: high profit, low reputation.
+- **Military Contract**: medium profit, medium reputation.
+- **Honor Contract**: low or even negative profit, high reputation.
+- **Scout Contract**: low profit, unlocks or expands monster personnel.
+
+Scout contracts use the same automatic battle system as every other contract. They are not a separate exploration mode.
+
+## Profit vs. Reputation
+
+Profit is short-term business health.
+
+Reputation is long-term access to better clients, higher-tier contracts, rare species, and scout opportunities.
+
+```text
+profit = baseReward + bonusReward - laborCost - replacementCosts
+```
+
+Reputation never increases combat stats.
+
+## Monster Personnel
+
+Monsters are company personnel, not fusion materials. Multiple individuals of the same species can exist, such as:
+
+- Orc #004
+- Orc #005
+- Goblin #001
+- Dragon #012
+
+Each individual tracks wage, fatigue, injury recovery time, dispatch count, kills, survival count, MVP count, and total profit contribution. These records create attachment and business history, but never increase combat stats.
 
 ## Removed Systems
 
-The game has no unit fusion, merges, leveling, skill trees, or permanent stat growth. Orc + Orc never becomes Captain, and Dragon + Dragon never becomes Elder Dragon. Monsters remain individuals with histories, not collectible upgrade materials.
+The game has no:
 
-## Monster Individuals
+- fusion or merging
+- leveling
+- skill trees
+- permanent attack upgrades
+- permanent HP upgrades
+- random absence
+- permanent death
 
-Every hired monster receives an individual identity, such as `オーク #035` or `ゴブリン #118`, and tracks:
+## Availability, Fatigue, and Injury
 
-- dispatch count
-- kills
-- survival rate
-- total profit contribution
-- fatigue
-- temporary injury status
+There is no random absence. A monster is unavailable only when exhausted or temporarily injured.
 
-These records create attachment and staffing context, but never increase combat stats.
-
-## Current Core Loop
-
-1. Select one of the available contracts.
-2. Read enemy intelligence, risk, bonus objective, and recommended counter.
-3. Hire from the applicant market.
-4. Place available monsters into frontline/backline formation.
-5. Watch the fully automatic battle.
-6. Review success, reward, bonus reward, replacement costs, profit, reputation gain, grade, MVP employee, casualties, injuries, and employee histories.
-7. Invest profit into company growth that increases options only.
+- Deployment increases fatigue.
+- Benched personnel recover fatigue after each contract.
+- High fatigue shows a warning.
+- Fatigue at the limit makes the monster unavailable until recovered.
+- Low-HP survivors and downed personnel can become injured for several contracts.
+- Injuries recover automatically.
 
 ## Company Growth
 
-Allowed upgrades improve decisions rather than combat power:
+Company upgrades improve options, not combat power:
 
-- Recruitment Advertising: more applicant slots.
-- Information Department: better enemy analysis text.
-- Contract Office: more contract choices.
-- Scout Network: improved rare applicant availability.
+- Recruitment Advertising: increases new personnel candidates.
+- Contract Desk: increases contract choices.
+- Information Department: improves enemy intelligence and prediction.
+- Scout Network: increases scout contract appearance and rare species access.
 
-## Win Condition
+## Screen Flow
 
-Reach company rank A or complete the Hero Elimination Contract.
+```text
+gameState.mode = "contractSelect" | "preparation" | "battle" | "result" | "company"
+```
+
+1. Select a contract.
+2. Review enemy intelligence and budget pressure.
+3. Assign available personnel to the formation board.
+4. Watch the automatic battle.
+5. Review profit, reputation, injuries, fatigue, MVP, and personnel history.
+6. Manage company upgrades and personnel candidates.
