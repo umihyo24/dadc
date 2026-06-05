@@ -13,6 +13,22 @@ const CONFIG = Object.freeze({
     battleLogLimit: 7,
     tickMs: 420,
     maxTicks: 90,
+    battleMaxMs: 70000,
+    attackCooldownBaseMs: 1850,
+    attackCooldownSpeedStepMs: 210,
+    minAttackCooldownMs: 720,
+    healerCooldownMs: 2400,
+    effectDurationMs: 860,
+    attackBumpMs: 260,
+    deathFadeMs: 620,
+    slashDurationMs: 280,
+    projectileDurationMs: 360,
+    casualtyFlashMs: 360,
+    survivedBonus: 12,
+    mvpKillWeight: 3,
+    mvpDamageWeight: 1,
+    mvpHealingWeight: 0.35,
+    maxBattleLogLines: 7,
     targetFrontFirst: true,
     baseAccuracy: 0.92,
     evasionAccuracyPenalty: 0.26,
@@ -24,6 +40,7 @@ const CONFIG = Object.freeze({
   traits: {
     humanSlayer: { label: '人間特攻', bonusVsHuman: 9 },
     evasion: { label: '回避' },
+    backlineAttack: { label: '後衛攻撃' },
     physicalResistance: { label: '物理耐性' },
     areaAttack: { label: '範囲攻撃' },
   },
@@ -47,7 +64,7 @@ const CONFIG = Object.freeze({
   },
   enemies: {
     knight: { id: 'knight', name: '騎士', faction: '騎士', hp: 54, attack: 12, speed: 2, row: 'front', armor: 2, traits: ['重装人間'], color: '#b8b6aa', icon: 'KNT' },
-    archer: { id: 'archer', name: '弓兵', faction: '弓兵', hp: 32, attack: 11, speed: 1, row: 'back', armor: 0, traits: ['遠隔人間'], color: '#d7a45f', icon: 'ARC' },
+    archer: { id: 'archer', name: '弓兵', faction: '弓兵', hp: 32, attack: 11, speed: 1, row: 'back', armor: 0, traits: ['遠隔人間', 'backlineAttack'], color: '#d7a45f', icon: 'ARC' },
     healer: { id: 'healer', name: '治療師', faction: '治療師', hp: 30, attack: 6, speed: 2, row: 'back', armor: 0, traits: ['味方回復'], color: '#f0df8d', icon: 'HEA' },
     captain: { id: 'captain', name: '隊長', faction: '隊長', hp: 72, attack: 15, speed: 3, row: 'front', armor: 3, traits: ['人間指揮官'], color: '#ffcc66', icon: 'CAP' },
   },
@@ -79,6 +96,7 @@ const CONFIG = Object.freeze({
   ui: {
     panel: '#fff0cf', panel2: '#f6dfb4', line: '#9c6a35', text: '#3b2517', muted: '#775338', gold: '#d88922',
     red: '#d85a4c', green: '#4fa85d', blue: '#3d8bd6', purple: '#7e55b8', orange: '#f29a2e',
+    darkPanel: '#181512', damage: '#f05a36', heal: '#49d36f', trait: '#ffe05f',
     button: '#e29a2e', buttonHover: '#f3b94d', disabled: '#c7ad88', wood: '#8b5529', parchment: '#fff4d6', ink: '#3b2517',
   },
 });
@@ -401,80 +419,259 @@ function startBattle() {
   const enemies = [...gameState.enemyFormation.front, ...gameState.enemyFormation.back].filter(Boolean);
   if (enemies.length <= 0) return;
   gameState.mode = 'battle';
-  gameState.battle = { elapsed: 0, tick: 0, log: ['契約履行開始。採用メンバーを評価します。'], enemies, stats: {} };
-  deployedArmy().forEach((unit) => { gameState.battle.stats[unit.id] = { name: unit.name, speciesId: unit.speciesId, color: unit.color, kills: 0, damage: 0 }; });
-  gameState.message = '戦闘中です。指揮入力は受け付けません。';
+  const army = deployedArmy();
+  gameState.battle = {
+    elapsed: 0,
+    timeMs: 0,
+    tick: 0,
+    log: ['契約履行開始。採用メンバーを評価します。'],
+    enemies,
+    stats: {},
+    effects: [],
+    completed: false,
+  };
+  [...army, ...enemies].forEach((unit) => {
+    if (!unit) return;
+    unit.battleCooldownMs = Math.round(attackCooldownMs(unit) * (0.35 + stableUnitRoll(unit.id, 1) * 0.35));
+    unit.attackAnimMs = 0;
+    unit.deathAnimMs = 0;
+    unit.lastHitMs = 0;
+  });
+  army.forEach((unit) => {
+    gameState.battle.stats[unit.id] = makeBattleStat(unit);
+  });
+  gameState.message = '戦闘中です。指揮入力は受け付けません。採用判断の結果を見守りましょう。';
+}
+
+function makeBattleStat(unit) {
+  return {
+    name: unit?.name || '不明', speciesId: unit?.speciesId || null, color: unit?.color || CONFIG.ui.muted,
+    kills: 0, damageDealt: 0, damage: 0, damageTaken: 0, healingDone: 0, survived: false,
+    traitHits: {},
+  };
 }
 
 function getCombatants(side) {
-  if (side === 'army') return deployedArmy().filter((u) => u.alive !== false && u.hp > 0);
+  if (side === 'army') return deployedArmy().filter((u) => u && u.alive !== false && u.hp > 0);
   const battleEnemies = gameState.battle && Array.isArray(gameState.battle.enemies) ? gameState.battle.enemies : [];
   return battleEnemies.filter((u) => u && u.alive !== false && u.hp > 0);
 }
 
-function chooseTarget(targets) {
-  if (!Array.isArray(targets) || targets.length <= 0) return null;
-  const front = targets.filter((u) => u && u.row === 'front');
-  const pool = CONFIG.combat.targetFrontFirst && front.length ? front : targets;
-  return pool.slice().sort((a, b) => (a.slot || 0) - (b.slot || 0))[0] || null;
+function attackCooldownMs(unit) {
+  const speed = Math.max(1, Number(unit?.speed) || 1);
+  return Math.max(CONFIG.combat.minAttackCooldownMs, CONFIG.combat.attackCooldownBaseMs - speed * CONFIG.combat.attackCooldownSpeedStepMs);
 }
 
-function deterministicHit(attacker, defender, tick) {
+function stableUnitRoll(id, salt = 0) {
+  const value = String(id || '').split('').reduce((sum, char) => sum + char.charCodeAt(0), 0) + salt * 97 + (gameState.battle?.tick || 0) * 13;
+  return (value % 100) / 100;
+}
+
+function hasTrait(unit, trait) {
+  return Boolean(unit && Array.isArray(unit.traits) && unit.traits.includes(trait));
+}
+
+function chooseTarget(attacker, targets) {
+  if (!attacker || !Array.isArray(targets) || targets.length <= 0) return null;
+  const canReachBack = hasTrait(attacker, 'areaAttack') || hasTrait(attacker, 'backlineAttack');
+  const front = targets.filter((u) => u && u.row === 'front');
+  const back = targets.filter((u) => u && u.row === 'back');
+  const pool = CONFIG.combat.targetFrontFirst && front.length && !canReachBack ? front : (canReachBack && back.length ? [...front, ...back] : targets);
+  return pool.slice().sort((a, b) => (a.row === b.row ? (a.slot || 0) - (b.slot || 0) : (a.row === 'front' ? -1 : 1)))[0] || null;
+}
+
+function chooseAreaTargets(attacker, primary, targets) {
+  if (!attacker || !primary || !Array.isArray(targets)) return [];
+  if (!hasTrait(attacker, 'areaAttack')) return [primary];
+  const others = targets.filter((u) => u && u.id !== primary.id);
+  return [primary, ...others.slice(0, CONFIG.combat.splashTargets)];
+}
+
+function deterministicHit(attacker, defender) {
   if (!attacker || !defender) return false;
   let accuracy = CONFIG.combat.baseAccuracy;
-  if (Array.isArray(defender.traits) && defender.traits.includes('evasion')) accuracy -= CONFIG.combat.evasionAccuracyPenalty;
-  const seed = (String(attacker.id).length * 31 + String(defender.id).length * 17 + tick * 13) % 100;
-  return seed / 100 <= accuracy;
+  if (hasTrait(defender, 'evasion')) accuracy -= CONFIG.combat.evasionAccuracyPenalty;
+  return stableUnitRoll(`${attacker.id}:${defender.id}`, 2) <= accuracy;
 }
 
-function calculateDamage(attacker, defender) {
-  if (!attacker || !defender) return 0;
+function calculateDamage(attacker, defender, options = {}) {
+  if (!attacker || !defender) return { amount: 0, traits: [] };
   let damage = Number(attacker.attack) || 0;
-  if (attacker.traits && attacker.traits.includes('humanSlayer') && defender.unitType === 'enemy') damage += CONFIG.traits.humanSlayer.bonusVsHuman;
-  if (defender.traits && defender.traits.includes('physicalResistance') && attacker.damageType === 'physical') damage *= CONFIG.combat.resistancePhysicalMultiplier;
+  const traits = [];
+  if (hasTrait(attacker, 'humanSlayer') && defender.unitType === 'enemy') {
+    damage += CONFIG.traits.humanSlayer.bonusVsHuman;
+    traits.push('humanSlayer');
+  }
+  if (options.splash) {
+    damage *= CONFIG.combat.areaSplashMultiplier;
+    traits.push('areaAttack');
+  }
+  if (hasTrait(defender, 'physicalResistance') && attacker.damageType === 'physical') {
+    damage *= CONFIG.combat.resistancePhysicalMultiplier;
+    traits.push('physicalResistance');
+  }
   damage -= Number(defender.armor) || 0;
-  return Math.max(1, Math.round(damage));
+  return { amount: Math.max(1, Math.round(damage)), traits };
 }
 
-function applyDamage(target, damage) {
-  if (!target || !Number.isFinite(damage)) return;
-  target.hp = Math.max(0, (Number(target.hp) || 0) - damage);
-  if (target.hp <= 0) target.alive = false;
+function applyDamage(attacker, target, damage, traits = []) {
+  if (!target || !Number.isFinite(damage)) return 0;
+  const targetHpBefore = Math.max(0, Number(target.hp) || 0);
+  const dealt = Math.min(Math.max(0, Math.round(damage)), targetHpBefore);
+  target.hp = Math.max(0, targetHpBefore - dealt);
+  target.lastHitMs = CONFIG.combat.casualtyFlashMs;
+  recordDamageTaken(target, dealt);
+  recordContribution(attacker, dealt, false);
+  addBattleEffect({ type: 'damage', targetId: target.id, value: dealt, color: CONFIG.ui.damage, durationMs: CONFIG.combat.effectDurationMs });
+  traits.forEach((trait) => showTraitText(trait, attacker, target));
+  if (target.hp <= 0 && target.alive !== false) {
+    target.alive = false;
+    target.deathAnimMs = CONFIG.combat.deathFadeMs;
+    recordContribution(attacker, 0, true);
+    addBattleEffect({ type: 'trait', targetId: target.id, text: 'DOWN!', color: CONFIG.ui.red, durationMs: CONFIG.combat.effectDurationMs });
+    pushBattleLog(`${target.name}が倒れた。`);
+  }
+  return dealt;
+}
+
+function healUnit(healer, target, amount) {
+  if (!healer || !target || target.alive === false || target.hp <= 0) return 0;
+  const before = Math.max(0, Number(target.hp) || 0);
+  target.hp = Math.min(target.maxHp || before, before + Math.max(0, Math.round(amount || 0)));
+  const healed = target.hp - before;
+  if (healed > 0) {
+    recordHealing(healer, healed);
+    addBattleEffect({ type: 'heal', targetId: target.id, value: healed, color: CONFIG.ui.heal, durationMs: CONFIG.combat.effectDurationMs });
+    showTraitText('heal', healer, target);
+    pushBattleLog(`${healer.name}が${target.name}を${healed}回復。`);
+  }
+  return healed;
+}
+
+function showTraitText(trait, actor, target) {
+  const labels = {
+    humanSlayer: 'HUMAN SLAYER!',
+    physicalResistance: 'RESIST!',
+    areaAttack: 'BREATH!',
+    evasion: 'EVADE!',
+    heal: 'HEAL!',
+  };
+  const textValue = labels[trait];
+  if (!textValue) return;
+  addBattleEffect({ type: 'trait', targetId: target?.id || actor?.id, sourceId: actor?.id, text: textValue, color: trait === 'heal' ? CONFIG.ui.heal : CONFIG.ui.trait, durationMs: CONFIG.combat.effectDurationMs });
+  recordTrait(actor, trait);
+}
+
+function addBattleEffect(effect) {
+  const battle = gameState.battle;
+  if (!battle || !Array.isArray(battle.effects)) return;
+  battle.effects.push({ ...effect, ageMs: 0, durationMs: effect.durationMs || CONFIG.combat.effectDurationMs });
+}
+
+function pushBattleLog(message) {
+  const log = gameState.battle && Array.isArray(gameState.battle.log) ? gameState.battle.log : [];
+  log.unshift(message);
+  while (log.length > CONFIG.combat.maxBattleLogLines) log.pop();
 }
 
 function doAttack(attacker, side) {
   if (!attacker || attacker.alive === false || attacker.hp <= 0) return;
   const targets = getCombatants(side === 'army' ? 'enemy' : 'army');
-  const target = chooseTarget(targets);
-  const log = gameState.battle && Array.isArray(gameState.battle.log) ? gameState.battle.log : [];
+  const target = chooseTarget(attacker, targets);
   if (!target) return;
-  if (!deterministicHit(attacker, target, gameState.battle.tick)) {
-    log.unshift(`${attacker.name}の攻撃は${target.name}に外れた。`);
+  attacker.attackAnimMs = CONFIG.combat.attackBumpMs;
+  addBattleEffect({ type: attacker.damageType === 'physical' ? 'slash' : 'projectile', sourceId: attacker.id, targetId: target.id, color: attacker.color || CONFIG.ui.damage, durationMs: CONFIG.combat.slashDurationMs });
+  if (!deterministicHit(attacker, target)) {
+    if (hasTrait(target, 'evasion')) showTraitText('evasion', target, target);
+    pushBattleLog(`${target.name}が${attacker.name}の攻撃を回避。`);
     return;
   }
-  const damage = calculateDamage(attacker, target);
-  const targetHpBefore = Math.max(0, target.hp || 0);
-  applyDamage(target, damage);
-  recordContribution(attacker, Math.min(damage, targetHpBefore), target.alive === false);
-  log.unshift(`${attacker.name}が${target.name}に${damage}ダメージ。`);
-  if (attacker.traits && attacker.traits.includes('areaAttack')) {
-    targets.filter((u) => u && u.id !== target.id).slice(0, CONFIG.combat.splashTargets).forEach((splash) => {
-      const splashDamage = Math.max(1, Math.round(damage * CONFIG.combat.areaSplashMultiplier));
-      const splashHpBefore = Math.max(0, splash.hp || 0);
-      applyDamage(splash, splashDamage);
-      recordContribution(attacker, Math.min(splashDamage, splashHpBefore), splash.alive === false);
-      log.unshift(`${attacker.name}の範囲攻撃が${splash.name}に${splashDamage}ダメージ。`);
-    });
-  }
-  if (target.alive === false) log.unshift(`${target.name}が倒れた。`);
-  while (log.length > CONFIG.combat.battleLogLimit) log.pop();
+  const hitTargets = chooseAreaTargets(attacker, target, targets);
+  if (hasTrait(attacker, 'areaAttack')) showTraitText('areaAttack', attacker, target);
+  hitTargets.forEach((hitTarget, index) => {
+    if (!hitTarget || hitTarget.alive === false || hitTarget.hp <= 0) return;
+    const result = calculateDamage(attacker, hitTarget, { splash: index > 0 });
+    const dealt = applyDamage(attacker, hitTarget, result.amount, result.traits);
+    pushBattleLog(`${attacker.name}が${hitTarget.name}に${dealt}ダメージ。`);
+  });
 }
 
 function recordContribution(attacker, damage, killed) {
   if (!attacker || attacker.unitType !== 'monster' || !gameState.battle || !gameState.battle.stats) return;
-  if (!gameState.battle.stats[attacker.id]) gameState.battle.stats[attacker.id] = { name: attacker.name, speciesId: attacker.speciesId, color: attacker.color, kills: 0, damage: 0 };
-  gameState.battle.stats[attacker.id].damage += Math.max(0, Math.round(damage || 0));
-  if (killed) gameState.battle.stats[attacker.id].kills += 1;
+  if (!gameState.battle.stats[attacker.id]) gameState.battle.stats[attacker.id] = makeBattleStat(attacker);
+  const stat = gameState.battle.stats[attacker.id];
+  stat.damageDealt += Math.max(0, Math.round(damage || 0));
+  stat.damage = stat.damageDealt;
+  if (killed) stat.kills += 1;
+}
+
+function recordDamageTaken(target, damage) {
+  if (!target || target.unitType !== 'monster' || !gameState.battle?.stats) return;
+  if (!gameState.battle.stats[target.id]) gameState.battle.stats[target.id] = makeBattleStat(target);
+  gameState.battle.stats[target.id].damageTaken += Math.max(0, Math.round(damage || 0));
+}
+
+function recordHealing(healer, amount) {
+  if (!healer || healer.unitType !== 'monster' || !gameState.battle?.stats) return;
+  if (!gameState.battle.stats[healer.id]) gameState.battle.stats[healer.id] = makeBattleStat(healer);
+  gameState.battle.stats[healer.id].healingDone += Math.max(0, Math.round(amount || 0));
+}
+
+function recordTrait(actor, trait) {
+  if (!actor || actor.unitType !== 'monster' || !gameState.battle?.stats) return;
+  if (!gameState.battle.stats[actor.id]) gameState.battle.stats[actor.id] = makeBattleStat(actor);
+  const traitHits = gameState.battle.stats[actor.id].traitHits || {};
+  traitHits[trait] = (traitHits[trait] || 0) + 1;
+  gameState.battle.stats[actor.id].traitHits = traitHits;
+}
+
+function enemySupportActions(enemy) {
+  if (!enemy || enemy.enemyId !== 'healer') return false;
+  const enemies = getCombatants('enemy');
+  const wounded = enemies.filter((ally) => ally && ally.hp > 0 && ally.hp < ally.maxHp).sort((a, b) => (a.hp || 0) - (b.hp || 0))[0];
+  if (wounded) healUnit(enemy, wounded, CONFIG.combat.healerAmount);
+  return Boolean(wounded);
+}
+
+function updateBattleEffects(deltaMs) {
+  const battle = gameState.battle;
+  if (!battle) return;
+  [...getCombatants('army'), ...getCombatants('enemy'), ...(battle.enemies || [])].forEach((unit) => {
+    if (!unit) return;
+    unit.attackAnimMs = Math.max(0, (unit.attackAnimMs || 0) - deltaMs);
+    unit.deathAnimMs = Math.max(0, (unit.deathAnimMs || 0) - deltaMs);
+    unit.lastHitMs = Math.max(0, (unit.lastHitMs || 0) - deltaMs);
+  });
+  battle.effects = (battle.effects || []).map((effect) => ({ ...effect, ageMs: (effect.ageMs || 0) + deltaMs })).filter((effect) => (effect.ageMs || 0) <= (effect.durationMs || CONFIG.combat.effectDurationMs));
+}
+
+function battleTick(deltaMs = CONFIG.combat.tickMs) {
+  if (!gameState.battle) return;
+  const battle = gameState.battle;
+  battle.tick += 1;
+  battle.timeMs += deltaMs;
+  updateBattleEffects(deltaMs);
+  const actors = [
+    ...getCombatants('army').map((u) => ({ side: 'army', unit: u })),
+    ...getCombatants('enemy').map((u) => ({ side: 'enemy', unit: u })),
+  ].sort((a, b) => ((b.unit.speed || 1) - (a.unit.speed || 1)) || String(a.unit.id).localeCompare(String(b.unit.id)));
+  actors.forEach((actor) => {
+    const unit = actor.unit;
+    if (!unit || unit.alive === false || unit.hp <= 0) return;
+    unit.battleCooldownMs = Math.max(0, (unit.battleCooldownMs || 0) - deltaMs);
+    if (unit.battleCooldownMs > 0) return;
+    if (actor.side === 'enemy' && unit.enemyId === 'healer' && enemySupportActions(unit)) {
+      unit.attackAnimMs = CONFIG.combat.attackBumpMs;
+      unit.battleCooldownMs = CONFIG.combat.healerCooldownMs;
+      return;
+    }
+    doAttack(unit, actor.side);
+    unit.battleCooldownMs = attackCooldownMs(unit);
+  });
+  safeCleanup();
+  const armyAlive = getCombatants('army').length;
+  const enemyAlive = getCombatants('enemy').length;
+  if (enemyAlive <= 0 || armyAlive <= 0 || battle.timeMs >= CONFIG.combat.battleMaxMs) finishBattle(enemyAlive <= 0 && armyAlive > 0);
 }
 
 function allEnemies() {
@@ -485,10 +682,10 @@ function allEnemies() {
 function enemyIntelligence() {
   const enemies = allEnemies();
   const total = Math.max(1, enemies.length);
-  const front = enemies.filter((e) => e.row === 'front');
-  const back = enemies.filter((e) => e.row === 'back');
-  const healers = enemies.filter((e) => e.enemyId === 'healer');
-  const humanPresence = Math.round((enemies.filter((e) => e.unitType === 'enemy').length / total) * 100);
+  const front = enemies.filter((e) => e && e.row === 'front');
+  const back = enemies.filter((e) => e && e.row === 'back');
+  const healers = enemies.filter((e) => e && e.enemyId === 'healer');
+  const humanPresence = Math.round((enemies.filter((e) => e && e.unitType === 'enemy').length / total) * 100);
   const frontlineThreat = front.reduce((sum, e) => sum + (e.attack || 0) + (e.maxHp || e.hp || 0) / 8 + (e.armor || 0) * 3, 0);
   const backlineThreat = back.reduce((sum, e) => sum + (e.attack || 0) * 1.5 + (e.enemyId === 'archer' ? 8 : 0), 0);
   const healingPresence = healers.length;
@@ -507,7 +704,7 @@ function threatStars(value, maxValue = 80) {
 }
 
 function monsterCounterValue(monster) {
-  if (!monster) return 0;
+  if (!monster || !Array.isArray(monster.traits)) return 0;
   const intel = enemyIntelligence();
   let value = 1;
   if (monster.traits.includes('humanSlayer')) value += Math.round(intel.humanPresence / 25);
@@ -553,12 +750,18 @@ function reportEvaluation() {
 
 function employeeOfTheDay() {
   const stats = gameState.battle && gameState.battle.stats ? Object.values(gameState.battle.stats) : [];
-  const best = stats.sort((a, b) => (b.kills - a.kills) || (b.damage - a.damage))[0];
-  if (!best) return { name: '該当者なし', kills: 0, contribution: '配置メンバーがいません。' };
-  const totalDamage = Math.max(1, stats.reduce((sum, item) => sum + (item.damage || 0), 0));
-  return { name: best.name, kills: best.kills || 0, contribution: `総ダメージ貢献 ${Math.round((best.damage || 0) / totalDamage * 100)}%` };
+  stats.forEach((stat) => {
+    stat.mvpScore = (stat.kills || 0) * CONFIG.combat.mvpKillWeight + (stat.damageDealt || stat.damage || 0) * CONFIG.combat.mvpDamageWeight + (stat.healingDone || 0) * CONFIG.combat.mvpHealingWeight + (stat.survived ? CONFIG.combat.survivedBonus : 0);
+  });
+  const best = stats.slice().sort((a, b) => (b.mvpScore - a.mvpScore) || ((b.kills || 0) - (a.kills || 0)) || ((b.damageDealt || b.damage || 0) - (a.damageDealt || a.damage || 0)))[0];
+  if (!best) return { name: '該当者なし', kills: 0, damageDealt: 0, contribution: '配置メンバーがいません。', reason: '採用メンバーが戦闘に参加しませんでした。' };
+  const traitHits = best.traitHits || {};
+  const reason = traitHits.humanSlayer ? `${best.kills || 0}体を撃破し、人間特攻を${traitHits.humanSlayer}回発動。`
+    : traitHits.areaAttack ? `範囲ブレスで合計${best.damageDealt || best.damage || 0}ダメージを記録。`
+      : best.survived ? `生存しながら${best.damageDealt || best.damage || 0}ダメージを与えました。`
+        : `${best.damageDealt || best.damage || 0}ダメージで契約に貢献。`;
+  return { name: best.name, speciesId: best.speciesId, color: best.color, kills: best.kills || 0, damageDealt: best.damageDealt || best.damage || 0, healingDone: best.healingDone || 0, survived: best.survived, contribution: `与ダメ ${best.damageDealt || best.damage || 0} / 被ダメ ${best.damageTaken || 0}`, reason };
 }
-
 
 function objectiveAchieved(victory, dead, baseProfit) {
   const contract = gameState.currentContract;
@@ -619,36 +822,14 @@ function cycleSpeciesPreference() {
   gameState.message = `提携エージェンシーの優先種族を${CONFIG.monsters[gameState.speciesPreference].name}に変更しました。`;
 }
 
-function enemySupportActions() {
-  const enemies = getCombatants('enemy');
-  const log = gameState.battle && Array.isArray(gameState.battle.log) ? gameState.battle.log : [];
-  enemies.forEach((enemy) => {
-    if (!enemy || enemy.enemyId !== 'healer') return;
-    const wounded = enemies.filter((ally) => ally && ally.hp > 0 && ally.hp < ally.maxHp).sort((a, b) => a.hp - b.hp)[0];
-    if (wounded) {
-      wounded.hp = Math.min(wounded.maxHp, wounded.hp + CONFIG.combat.healerAmount);
-      log.unshift(`${enemy.name}が${wounded.name}を回復。`);
-    }
-  });
-}
-
-function battleTick() {
-  if (!gameState.battle) return;
-  gameState.battle.tick += 1;
-  enemySupportActions();
-  const actors = [
-    ...getCombatants('army').map((u) => ({ side: 'army', unit: u })),
-    ...getCombatants('enemy').map((u) => ({ side: 'enemy', unit: u })),
-  ].sort((a, b) => ((a.unit.speed || 1) - (b.unit.speed || 1)) || String(a.unit.id).localeCompare(String(b.unit.id)));
-  actors.forEach((actor) => doAttack(actor.unit, actor.side));
-  safeCleanup();
-  const armyAlive = getCombatants('army').length;
-  const enemyAlive = getCombatants('enemy').length;
-  if (enemyAlive <= 0 || armyAlive <= 0 || gameState.battle.tick >= CONFIG.combat.maxTicks) finishBattle(enemyAlive <= 0 && armyAlive > 0);
-}
-
 
 function finishBattle(victory) {
+  if (gameState.battle && gameState.battle.stats) {
+    gameState.army.filter(Boolean).forEach((unit) => {
+      if (!gameState.battle.stats[unit.id]) gameState.battle.stats[unit.id] = makeBattleStat(unit);
+      gameState.battle.stats[unit.id].survived = unit.alive !== false && unit.hp > 0;
+    });
+  }
   const dead = gameState.army.filter((unit) => unit && unit.alive === false);
   const replacementCosts = dead.reduce((sum, unit) => sum + (Number(unit.hireCost) || 0) * CONFIG.economy.replacementMultiplier, 0);
   const baseReward = victory && gameState.currentContract ? gameState.currentContract.reward : 0;
@@ -699,7 +880,7 @@ function safeCleanup() {
   gameState.army = Array.isArray(gameState.army) ? gameState.army.filter(Boolean) : [];
   gameState.market = Array.isArray(gameState.market) ? gameState.market.filter(Boolean) : [];
   const battle = gameState.battle;
-  if (battle && Array.isArray(battle.enemies)) battle.enemies = battle.enemies.filter(Boolean);
+  if (battle && Array.isArray(battle.enemies)) battle.enemies = battle.enemies.filter((unit) => unit && (unit.alive !== false || (unit.deathAnimMs || 0) > 0));
 }
 
 function processAction(action) {
@@ -727,10 +908,7 @@ function update(deltaMs) {
   }
   if (gameState.phase === 'playing' && gameState.mode === 'battle' && gameState.battle) {
     gameState.battle.elapsed += deltaMs;
-    while (gameState.battle && gameState.battle.elapsed >= CONFIG.combat.tickMs && gameState.mode === 'battle') {
-      gameState.battle.elapsed -= CONFIG.combat.tickMs;
-      battleTick();
-    }
+    battleTick(deltaMs);
   }
 }
 
@@ -1093,17 +1271,19 @@ function drawPredictionPanel() {
 }
 
 function drawReportPanel() {
-  drawPanel('前回の戦闘結果', 580, 474, 300, 286, { variant: 'celebration', banner: CONFIG.ui.purple, icon: '★' });
+  drawPanel('戦闘結果サマリー', 580, 474, 300, 286, { variant: 'celebration', banner: CONFIG.ui.purple, icon: '★' });
   if (gameState.report) {
     const evaluation = reportEvaluation();
-    text('Contract Evaluation', 604, 510, 18, '#8a4b18', 'left', '900');
-    text(`${evaluation.stars} Grade ${gameState.report.grade}`, 604, 540, 22, '#ffcf33', 'left', '900');
-    drawPill(gameState.report.victory ? '契約成功' : '契約失敗', 604, 576, 112, gameState.report.victory ? CONFIG.ui.green : CONFIG.ui.red);
-    drawPill(gameState.economy.bonusAchieved ? 'Bonus達成' : 'Bonus未達', 728, 576, 112, gameState.economy.bonusAchieved ? CONFIG.ui.purple : CONFIG.ui.muted);
-    text(`Profit ${gameState.economy.profit >= 0 ? '+' : ''}${gameState.economy.profit}G`, 604, 616, 22, gameState.economy.profit >= 0 ? CONFIG.ui.green : CONFIG.ui.red, 'left', '900');
-    text(`Reputation +${gameState.economy.reputationGain}`, 604, 646, 16, CONFIG.ui.purple, 'left', '900');
-    text(`損耗: ${gameState.report.dead.length ? gameState.report.dead.join('、') : 'なし'}`, 604, 672, 13, CONFIG.ui.ink, 'left', '800');
-    wrapText(gameState.report.victory ? '利益・損耗・目的達成から信用を算出。単純な周回では信用は増えません。' : '対策カードを優先して次の契約へ備えよう。', 604, 704, 248, 16, 13, '#5d3a1f', '900');
+    text('Contract Evaluation', 604, 506, 18, '#8a4b18', 'left', '900');
+    text(`${evaluation.stars} Grade ${gameState.report.grade}`, 604, 530, 22, '#ffcf33', 'left', '900');
+    drawPill(gameState.report.victory ? 'Contract Success' : 'Contract Failure', 604, 562, 130, gameState.report.victory ? CONFIG.ui.green : CONFIG.ui.red);
+    drawPill(gameState.economy.bonusAchieved ? 'Bonus +達成' : 'Bonus未達', 744, 562, 96, gameState.economy.bonusAchieved ? CONFIG.ui.purple : CONFIG.ui.muted);
+    text(`Reward ${gameState.economy.reward}G / Bonus ${gameState.economy.bonusReward}G`, 604, 598, 14, CONFIG.ui.gold, 'left', '900');
+    text(`Replacement Costs -${gameState.economy.replacementCosts}G`, 604, 620, 14, CONFIG.ui.red, 'left', '900');
+    text(`Profit ${gameState.economy.profit >= 0 ? '+' : ''}${gameState.economy.profit}G`, 604, 644, 22, gameState.economy.profit >= 0 ? CONFIG.ui.green : CONFIG.ui.red, 'left', '900');
+    text(`Reputation Gain +${gameState.economy.reputationGain}`, 604, 674, 15, CONFIG.ui.purple, 'left', '900');
+    text(`Hiring Evaluation: ${evaluation.label}`, 604, 698, 13, CONFIG.ui.ink, 'left', '900');
+    text(`損耗: ${gameState.report.dead.length ? gameState.report.dead.join('、') : 'なし'}`, 604, 720, 13, CONFIG.ui.ink, 'left', '800');
   } else {
     text('戦闘後に採用評価を表示', 604, 530, 18, '#8a4b18', 'left', '900');
     text('★★★★★', 604, 568, 28, '#d6ba7c', 'left', '900');
@@ -1117,9 +1297,10 @@ function drawMvpPanel() {
     const base = CONFIG.monsters[mvp.speciesId] || {};
     rect(920, 520, 140, 118, panelFill(920, 520, 140, 118, '#dff2ff', '#bddded'), '#9c6a35', 14, 2);
     drawMonsterFallback({ ...mvp, color: mvp.color || base.color }, 924, 514, 132, 124);
-    text(mvp.name, 990, 648, 20, CONFIG.ui.ink, 'center', '900');
-    drawPill(`撃破 ${mvp.kills}`, 932, 678, 96, CONFIG.ui.gold, '#3b2517');
-    wrapText(mvp.contribution, 920, 712, 136, 15, 12, CONFIG.ui.muted, '800');
+    text(mvp.name, 990, 646, 18, CONFIG.ui.ink, 'center', '900');
+    drawPill(`撃破 ${mvp.kills}`, 920, 674, 64, CONFIG.ui.gold, '#3b2517');
+    drawPill(`与${mvp.damageDealt}`, 994, 674, 60, CONFIG.ui.red);
+    wrapText(mvp.reason || mvp.contribution, 920, 706, 136, 15, 12, CONFIG.ui.muted, '800');
   } else {
     text('戦闘後に発表', 990, 536, 16, CONFIG.ui.muted, 'center', '900');
     text('👑', 990, 582, 44, CONFIG.ui.gold, 'center', '900');
@@ -1145,6 +1326,148 @@ function drawEconomyPanel() {
   if (gameState.phase === 'gameover') button('restart', '再開', 1118, 752, 124, 26, { type: 'restart' });
 }
 
+function battleUnitById(id) {
+  if (!id) return null;
+  const armyUnit = gameState.army.find((unit) => unit && unit.id === id);
+  if (armyUnit) return armyUnit;
+  const enemies = gameState.battle && Array.isArray(gameState.battle.enemies) ? gameState.battle.enemies : [];
+  return enemies.find((unit) => unit && unit.id === id) || null;
+}
+
+function battleUnitPosition(unit) {
+  const side = unit?.unitType === 'enemy' ? 'enemy' : 'army';
+  const row = unit?.row === 'back' ? 'back' : 'front';
+  const slot = Number.isInteger(unit?.slot) ? unit.slot : 0;
+  const yBase = row === 'front' ? 275 : 495;
+  const xBase = side === 'army' ? (row === 'front' ? 230 : 150) : (row === 'front' ? 820 : 900);
+  const direction = side === 'army' ? 1 : -1;
+  const x = xBase + slot * 88 * direction;
+  const bump = unit?.attackAnimMs ? (unit.attackAnimMs / CONFIG.combat.attackBumpMs) * 24 * direction : 0;
+  const shake = unit?.lastHitMs ? Math.sin((unit.lastHitMs / CONFIG.combat.casualtyFlashMs) * Math.PI * 8) * 4 : 0;
+  return { x: x + bump + shake, y: yBase + slot * 10, direction };
+}
+
+function drawHpBar(unit, x, y, w) {
+  const hp = Math.max(0, Number(unit?.hp) || 0);
+  const maxHp = Math.max(1, Number(unit?.maxHp) || 1);
+  rect(x, y, w, 12, '#1d1713', '#4a2a18', 6, 1);
+  ctx.fillStyle = hp / maxHp > 0.45 ? CONFIG.ui.green : CONFIG.ui.red;
+  ctx.fillRect(x + 2, y + 2, Math.max(0, (w - 4) * hp / maxHp), 8);
+  text(`${hp}/${maxHp}`, x + w / 2, y - 2, 10, '#fff8dc', 'center', '900');
+}
+
+function drawBattleToken(unit) {
+  if (!unit) return;
+  const pos = battleUnitPosition(unit);
+  const opacity = unit.alive === false ? Math.max(0.25, (unit.deathAnimMs || 0) / CONFIG.combat.deathFadeMs) : 1;
+  const size = unit.speciesId === 'dragon' ? 128 : 104;
+  const isEnemy = unit.unitType === 'enemy';
+  const imageKey = isEnemy ? `monsters.${unit.enemyId}.${unit.row}.idle` : `monsters.${unit.speciesId}.${CONFIG.monsters[unit.speciesId]?.preferredRow || 'front'}.idle`;
+  ctx.save();
+  ctx.globalAlpha = opacity;
+  ctx.fillStyle = 'rgba(38, 22, 12, 0.25)';
+  ctx.beginPath();
+  ctx.ellipse(pos.x, pos.y + size * 0.44, size * 0.42, 16, 0, 0, Math.PI * 2);
+  ctx.fill();
+  safeDrawImage(ctx, gameState.assets.images[imageKey], pos.x - size / 2, pos.y - size / 2, size, size, () => drawMonsterFallback(unit, pos.x - size / 2, pos.y - size / 2, size, size));
+  const nameW = 116;
+  rect(pos.x - nameW / 2, pos.y - size / 2 - 36, nameW, 30, 'rgba(24, 20, 16, 0.86)', unit.unitType === 'enemy' ? CONFIG.ui.red : CONFIG.ui.blue, 10, 2);
+  const badge = traitLabels(unit.traits)[0] || (unit.unitType === 'enemy' ? '人間' : '標準');
+  text(unit.name, pos.x, pos.y - size / 2 - 32, 13, '#fff7de', 'center', '900');
+  text(badge, pos.x, pos.y - size / 2 - 17, 10, unit.unitType === 'enemy' ? '#ffb9ad' : '#bde1ff', 'center', '900');
+  drawHpBar(unit, pos.x - 54, pos.y - size / 2 - 48, 108);
+  ctx.restore();
+}
+
+function drawBattleEffect(effect) {
+  if (!effect) return;
+  const source = battleUnitById(effect.sourceId);
+  const target = battleUnitById(effect.targetId);
+  const sourcePos = source ? battleUnitPosition(source) : null;
+  const targetPos = target ? battleUnitPosition(target) : null;
+  const progress = Math.max(0, Math.min(1, (effect.ageMs || 0) / Math.max(1, effect.durationMs || CONFIG.combat.effectDurationMs)));
+  ctx.save();
+  ctx.globalAlpha = 1 - progress * 0.75;
+  if ((effect.type === 'slash' || effect.type === 'projectile') && sourcePos && targetPos) {
+    const x = sourcePos.x + (targetPos.x - sourcePos.x) * Math.min(1, progress * 1.5);
+    const y = sourcePos.y + (targetPos.y - sourcePos.y) * Math.min(1, progress * 1.5);
+    ctx.strokeStyle = effect.color || CONFIG.ui.damage;
+    ctx.lineWidth = effect.type === 'slash' ? 7 : 5;
+    ctx.beginPath();
+    ctx.moveTo(x - 22, y - 12);
+    ctx.lineTo(x + 22, y + 12);
+    ctx.stroke();
+    if (effect.type === 'projectile') {
+      ctx.fillStyle = effect.color || CONFIG.ui.orange;
+      ctx.beginPath(); ctx.arc(x, y, 10, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+  if ((effect.type === 'damage' || effect.type === 'heal' || effect.type === 'trait') && targetPos) {
+    const yOffset = -70 - progress * 42;
+    const label = effect.type === 'trait' ? effect.text : `${effect.type === 'heal' ? '+' : '-'}${effect.value}`;
+    const color = effect.color || (effect.type === 'heal' ? CONFIG.ui.heal : CONFIG.ui.damage);
+    text(label, targetPos.x, targetPos.y + yOffset, effect.type === 'trait' ? 24 : 28, color, 'center', '900');
+    ctx.strokeStyle = 'rgba(55,25,12,0.45)';
+  }
+  ctx.restore();
+}
+
+function drawBattleLogPanel() {
+  drawPanel('戦闘ログ', 1010, 368, 238, 300, { variant: 'parchment', banner: CONFIG.ui.purple, icon: '✎' });
+  const log = gameState.battle && Array.isArray(gameState.battle.log) ? gameState.battle.log : [];
+  log.slice(0, CONFIG.combat.maxBattleLogLines).forEach((line, index) => {
+    wrapText(line, 1030, 410 + index * 34, 198, 15, 12, index === 0 ? CONFIG.ui.ink : CONFIG.ui.muted, '900');
+  });
+  text('… 戦闘中 …', 1129, 642, 13, CONFIG.ui.muted, 'center', '900');
+}
+
+function drawBattleScene() {
+  drawHeader();
+  const contract = gameState.currentContract;
+  drawPanel('契約情報', 24, 72, 300, 160, { variant: 'parchment', banner: CONFIG.ui.blue, icon: '🛡' });
+  text(contract ? contract.title : '未選択契約', 48, 110, 16, CONFIG.ui.ink, 'left', '900');
+  text(`報酬: ${contract ? contract.reward : 0}G`, 48, 140, 20, CONFIG.ui.gold, 'left', '900');
+  text(`ボーナス: ${contract ? contract.bonusObjective : '-'}`, 48, 170, 14, CONFIG.ui.green, 'left', '900');
+  text(`難易度: ${contract ? '★'.repeat(contract.difficulty) : '-'}`, 48, 198, 16, CONFIG.ui.red, 'left', '900');
+
+  drawPanel('敵インテリジェンス', 946, 72, 308, 160, { variant: 'parchment', banner: CONFIG.ui.red, icon: '⚔' });
+  const intel = enemyIntelligence();
+  text(`人間率: ${intel.humanPresence >= 75 ? '高' : '中'} (${intel.humanPresence}%)`, 970, 110, 18, CONFIG.ui.red, 'left', '900');
+  text(`前衛耐久: ${threatStars(intel.frontlineThreat, 90)}`, 970, 140, 15, CONFIG.ui.ink, 'left', '900');
+  text(`後衛火力: ${threatStars(intel.backlineThreat, 80)}`, 970, 168, 15, CONFIG.ui.ink, 'left', '900');
+  text(`回復能力: ${'✚'.repeat(Math.max(1, intel.healingPresence))}`, 970, 196, 15, CONFIG.ui.green, 'left', '900');
+
+  rect(344, 72, 602, 92, panelFill(344, 72, 602, 92, '#201c18', '#11100f'), '#8a5a2b', 18, 4);
+  text('戦闘中…', 645, 88, 32, CONFIG.ui.trait, 'center', '900');
+  const elapsed = Math.floor((gameState.battle?.timeMs || 0) / 1000);
+  text(`${String(Math.floor(elapsed / 60)).padStart(2, '0')}:${String(elapsed % 60).padStart(2, '0')}`, 645, 124, 32, '#fff7de', 'center', '900');
+
+  rect(34, 246, 1200, 428, panelFill(34, 246, 1200, 428, '#9bd374', '#c9965d'), '#5f4328', 20, 4);
+  ctx.fillStyle = 'rgba(255,255,255,0.18)';
+  ctx.beginPath(); ctx.moveTo(34, 375); ctx.bezierCurveTo(340, 330, 690, 350, 1234, 312); ctx.lineTo(1234, 246); ctx.lineTo(34, 246); ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+  ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(640, 250); ctx.lineTo(640, 672); ctx.stroke();
+  text('自軍 FRONTLINE', 236, 252, 18, '#143b5f', 'center', '900');
+  text('自軍 BACKLINE', 184, 472, 18, '#143b5f', 'center', '900');
+  text('敵軍 FRONTLINE', 846, 252, 18, '#76251f', 'center', '900');
+  text('敵軍 BACKLINE', 976, 472, 18, '#76251f', 'center', '900');
+
+  const battleEnemies = gameState.battle && Array.isArray(gameState.battle.enemies) ? gameState.battle.enemies : [];
+  [...gameState.army.filter((unit) => unit && unit.row), ...battleEnemies].filter(Boolean).sort((a, b) => (a.row === b.row ? (a.slot || 0) - (b.slot || 0) : (a.row === 'back' ? 1 : -1))).forEach(drawBattleToken);
+  (gameState.battle?.effects || []).forEach(drawBattleEffect);
+
+  const dead = gameState.army.filter((unit) => unit && unit.alive === false).length;
+  const armyPower = deployedArmy().reduce((sum, unit) => sum + (unit.attack || 0) + (unit.maxHp || 0), 0);
+  const enemyPower = battleEnemies.reduce((sum, unit) => sum + (unit.attack || 0) + (unit.maxHp || 0), 0);
+  rect(42, 700, 500, 52, panelFill(42, 700, 500, 52, '#164b75', '#0d2c45'), '#8a5a2b', 14, 3);
+  text(`自軍　総戦力:${armyPower}　損耗:${dead}体`, 66, 716, 22, '#fff7de', 'left', '900');
+  rect(738, 700, 500, 52, panelFill(738, 700, 500, 52, '#8c2e25', '#4a1612'), '#8a5a2b', 14, 3);
+  text(`敵軍　総戦力:${enemyPower}　生存:${getCombatants('enemy').length}体`, 762, 716, 22, '#fff7de', 'left', '900');
+  text('VS', 640, 704, 42, CONFIG.ui.trait, 'center', '900');
+  drawBattleLogPanel();
+}
+
 function render() {
   if (!ctx) return;
   gameState.input.buttons = [];
@@ -1160,6 +1483,10 @@ function render() {
   rect(14, 54, 1252, 718, 'rgba(255, 246, 223, 0.34)', 'rgba(138, 90, 43, 0.28)', 18, 2);
   if (gameState.phase === 'start') {
     drawStart();
+    return;
+  }
+  if (gameState.mode === 'battle') {
+    drawBattleScene();
     return;
   }
   drawHeader();
