@@ -2,11 +2,11 @@
 
 const CONFIG = Object.freeze({
   canvas: { width: 1280, height: 820, fps: 60 },
-  game: { startingGold: 120, maxDay: 10, marketSize: 5 },
+  game: { startingGold: 120, baseMarketSize: 5, baseContractSlots: 3, winRank: 'A' },
   formation: { frontSlots: 3, backSlots: 3 },
-  economy: { replacementMultiplier: 2, victoryBonus: 14, baseReward: 46, dayReward: 9 },
+  economy: { replacementMultiplier: 2 },
   combat: {
-    dayStatGrowth: 0.08,
+    difficultyStatGrowth: 0.1,
     mergedStatMultiplier: 1.7,
     mergedCostMultiplier: 2,
     splashTargets: 2,
@@ -51,17 +51,30 @@ const CONFIG = Object.freeze({
     healer: { id: 'healer', name: '治療師', faction: '治療師', hp: 30, attack: 6, speed: 2, row: 'back', armor: 0, traits: ['味方回復'], color: '#f0df8d', icon: 'HEA' },
     captain: { id: 'captain', name: '隊長', faction: '隊長', hp: 72, attack: 15, speed: 3, row: 'front', armor: 3, traits: ['人間指揮官'], color: '#ffcc66', icon: 'CAP' },
   },
-  days: [
-    { enemies: ['knight', 'archer'], market: ['orc', 'goblin', 'ghost', 'goblin', 'orc'] },
-    { enemies: ['knight', 'knight', 'healer'], market: ['ghost', 'orc', 'dragon', 'goblin', 'ghost'] },
-    { enemies: ['archer', 'archer', 'knight'], market: ['goblin', 'dragon', 'orc', 'ghost', 'goblin'] },
-    { enemies: ['captain', 'healer', 'archer'], market: ['orc', 'orc', 'dragon', 'ghost', 'goblin'] },
-    { enemies: ['knight', 'knight', 'archer', 'healer'], market: ['ghost', 'ghost', 'dragon', 'orc', 'goblin'] },
-    { enemies: ['captain', 'knight', 'archer', 'archer'], market: ['dragon', 'dragon', 'goblin', 'orc', 'ghost'] },
-    { enemies: ['captain', 'healer', 'healer', 'knight'], market: ['orc', 'ghost', 'dragon', 'goblin', 'orc'] },
-    { enemies: ['captain', 'captain', 'archer', 'healer'], market: ['dragon', 'ghost', 'ghost', 'orc', 'goblin'] },
-    { enemies: ['captain', 'knight', 'knight', 'archer', 'healer'], market: ['orc', 'orc', 'dragon', 'dragon', 'ghost'] },
-    { enemies: ['captain', 'captain', 'knight', 'archer', 'healer', 'archer'], market: ['dragon', 'dragon', 'orc', 'ghost', 'goblin'] },
+
+  ranks: [
+    { rank: 'E', reputation: 0 },
+    { rank: 'D', reputation: 40 },
+    { rank: 'C', reputation: 95 },
+    { rank: 'B', reputation: 170 },
+    { rank: 'A', reputation: 270 },
+    { rank: 'S', reputation: 420 },
+  ],
+  contractTemplates: [
+    { title: '聖騎士小隊の足止め', reward: 120, difficulty: 1, enemies: ['knight', 'archer'], bonusObjective: 'No Casualties', bonusReward: 45, minRank: 'E' },
+    { title: '巡礼弓兵隊の攪乱', reward: 145, difficulty: 1, enemies: ['archer', 'archer', 'knight'], bonusObjective: 'Deploy 3 Units Or Less', bonusReward: 55, minRank: 'E' },
+    { title: '前線治療班の排除', reward: 180, difficulty: 2, enemies: ['knight', 'healer', 'archer'], bonusObjective: 'Use Human Slayer', bonusReward: 60, minRank: 'D' },
+    { title: '城門守備隊への増援派遣', reward: 220, difficulty: 2, enemies: ['knight', 'knight', 'healer'], bonusObjective: 'Finish With Profit Above 100G', bonusReward: 75, minRank: 'D' },
+    { title: '聖堂精鋭の迎撃契約', reward: 280, difficulty: 3, enemies: ['captain', 'knight', 'archer'], bonusObjective: 'Complete Without Merged Units', bonusReward: 95, minRank: 'C' },
+    { title: '補給線制圧の短期契約', reward: 320, difficulty: 3, enemies: ['captain', 'healer', 'archer', 'archer'], bonusObjective: 'Deploy 3 Units Or Less', bonusReward: 110, minRank: 'C' },
+    { title: '聖都外郭の威力偵察', reward: 390, difficulty: 4, enemies: ['captain', 'knight', 'knight', 'healer'], bonusObjective: 'No Casualties', bonusReward: 140, minRank: 'B' },
+    { title: '勇者護衛隊の分断作戦', reward: 460, difficulty: 4, enemies: ['captain', 'captain', 'archer', 'healer'], bonusObjective: 'Use Human Slayer', bonusReward: 155, minRank: 'B' },
+    { title: 'Hero Elimination Contract', reward: 620, difficulty: 5, enemies: ['captain', 'captain', 'knight', 'archer', 'healer', 'archer'], bonusObjective: 'Finish With Profit Above 100G', bonusReward: 220, minRank: 'A', heroContract: true },
+  ],
+  investments: [
+    { id: 'recruitmentAd', name: 'Recruitment Ad', cost: 100, description: '+1 Market Candidate', maxLevel: 2 },
+    { id: 'agencyPartnership', name: 'Agency Partnership', cost: 200, description: 'Choose one species preference', maxLevel: 1 },
+    { id: 'premiumContractDesk', name: 'Premium Contract Desk', cost: 300, description: 'Unlock higher-tier contracts', maxLevel: 1 },
   ],
   ui: {
     panel: '#fff0cf', panel2: '#f6dfb4', line: '#9c6a35', text: '#3b2517', muted: '#775338', gold: '#d88922',
@@ -91,16 +104,21 @@ const gameState = {
   phase: 'start',
   day: 1,
   gold: CONFIG.game.startingGold,
-  mode: 'planning',
+  mode: 'contracts',
   market: [],
   army: [],
+  contractOffers: [],
+  currentContract: null,
+  company: { reputation: 0, rank: 'E', totalProfit: 0, completedContracts: 0 },
+  investments: { recruitmentAd: 0, agencyPartnership: 0, premiumContractDesk: 0 },
+  speciesPreference: null,
   enemyFormation: { front: [], back: [] },
   selectedUnitId: null,
   selectedMergeId: null,
   battle: null,
   report: null,
-  economy: { reward: 0, replacementCosts: 0, profit: 0 },
-  message: 'ようこそ、派遣責任者。採用前に敵を分析してください。',
+  economy: { reward: 0, bonusReward: 0, replacementCosts: 0, profit: 0, reputationGain: 0, bonusAchieved: false },
+  message: 'ようこそ、採用責任者。契約を選び、必要な魔物だけを採用してください。',
   input: { actions: [], mouse: { x: 0, y: 0 }, buttons: [], cards: [], slots: [] },
   assets: { images: {} },
   counters: { unit: 1 },
@@ -141,33 +159,114 @@ function makeMonster(speciesId, merged = false) {
   };
 }
 
-function makeEnemy(enemyId, index) {
+function makeEnemy(enemyId, index, difficulty = 1) {
   const base = CONFIG.enemies[enemyId];
   if (!base) return null;
-  const dayScale = 1 + (Math.max(1, gameState.day) - 1) * CONFIG.combat.dayStatGrowth;
+  const difficultyScale = 1 + (Math.max(1, difficulty) - 1) * CONFIG.combat.difficultyStatGrowth;
   return {
     unitType: 'enemy', id: `e${gameState.day}_${index}`, enemyId, name: base.name, faction: base.faction,
-    row: base.row, slot: index, alive: true, hp: Math.round(base.hp * dayScale), maxHp: Math.round(base.hp * dayScale),
-    attack: Math.round(base.attack * dayScale), speed: base.speed, armor: base.armor, traits: [...base.traits], color: base.color, icon: base.icon,
+    row: base.row, slot: index, alive: true, hp: Math.round(base.hp * difficultyScale), maxHp: Math.round(base.hp * difficultyScale),
+    attack: Math.round(base.attack * difficultyScale), speed: base.speed, armor: base.armor, traits: [...base.traits], color: base.color, icon: base.icon,
   };
 }
 
-function prepareDay() {
-  const dayConfig = CONFIG.days[Math.min(gameState.day - 1, CONFIG.days.length - 1)] || CONFIG.days[0];
-  gameState.market = (dayConfig.market || []).slice(0, CONFIG.game.marketSize).map((speciesId, index) => ({ id: `m${gameState.day}_${index}`, speciesId, sold: false }));
-  const enemies = (dayConfig.enemies || []).map((enemyId, index) => makeEnemy(enemyId, index)).filter(Boolean);
+
+function rankIndex(rank) {
+  return CONFIG.ranks.findIndex((item) => item.rank === rank);
+}
+
+function rankForReputation(reputation) {
+  return CONFIG.ranks.slice().reverse().find((item) => reputation >= item.reputation)?.rank || 'E';
+}
+
+function marketSize() {
+  return CONFIG.game.baseMarketSize + (gameState.investments.recruitmentAd || 0);
+}
+
+function contractSlotCount() {
+  return CONFIG.game.baseContractSlots + (gameState.investments.premiumContractDesk ? 1 : 0);
+}
+
+function availableContracts() {
+  const rank = rankIndex(gameState.company.rank);
+  const premium = gameState.investments.premiumContractDesk ? 1 : 0;
+  return CONFIG.contractTemplates.filter((contract) => rankIndex(contract.minRank) <= rank + premium);
+}
+
+function cloneContract(template, index) {
+  return {
+    id: `c${gameState.day}_${index}`,
+    title: template.title,
+    reward: template.reward,
+    difficulty: template.difficulty,
+    enemyFormation: [...template.enemies],
+    bonusObjective: template.bonusObjective,
+    bonusReward: template.bonusReward,
+    heroContract: Boolean(template.heroContract),
+  };
+}
+
+function generateContractOffers() {
+  const pool = availableContracts().sort((a, b) => (a.difficulty - b.difficulty) || a.title.localeCompare(b.title));
+  const offset = (gameState.company.completedContracts + gameState.day - 1) % Math.max(1, pool.length);
+  const offers = [];
+  for (let i = 0; i < Math.min(contractSlotCount(), pool.length); i += 1) {
+    offers.push(cloneContract(pool[(offset + i) % pool.length], i));
+  }
+  return offers;
+}
+
+function generateMarket(contract) {
+  const preferred = [];
+  if (contract.bonusObjective === 'Use Human Slayer') preferred.push('orc', 'orc');
+  if (contract.bonusObjective === 'No Casualties') preferred.push('ghost', 'dragon');
+  if (contract.bonusObjective === 'Deploy 3 Units Or Less') preferred.push('dragon', 'orc');
+  if (contract.bonusObjective === 'Complete Without Merged Units') preferred.push('goblin', 'ghost', 'orc');
+  if (contract.bonusObjective === 'Finish With Profit Above 100G') preferred.push('goblin', 'ghost');
+  if (gameState.speciesPreference) preferred.unshift(gameState.speciesPreference, gameState.speciesPreference);
+  const rotation = ['orc', 'goblin', 'ghost', 'dragon'];
+  const desired = marketSize();
+  const list = [];
+  let cursor = (gameState.day + (contract?.difficulty || 1)) % rotation.length;
+  while (list.length < desired) {
+    list.push(preferred[list.length] || rotation[(cursor + list.length) % rotation.length]);
+  }
+  return list.slice(0, desired).map((speciesId, index) => ({ id: `m${gameState.day}_${index}`, speciesId, sold: false }));
+}
+
+function setEnemyFormation(contract) {
+  const enemies = ((contract && contract.enemyFormation) || []).map((enemyId, index) => makeEnemy(enemyId, index, contract.difficulty)).filter(Boolean);
   gameState.enemyFormation = { front: enemies.filter((e) => e.row === 'front'), back: enemies.filter((e) => e.row === 'back') };
-  gameState.mode = 'planning';
+}
+
+function prepareDay() {
+  gameState.contractOffers = generateContractOffers();
+  gameState.currentContract = null;
+  gameState.market = [];
+  gameState.enemyFormation = { front: [], back: [] };
+  gameState.mode = 'contracts';
   gameState.selectedUnitId = null;
   gameState.selectedMergeId = null;
   gameState.battle = null;
   gameState.report = null;
-  gameState.economy = { reward: rewardForDay(gameState.day), replacementCosts: 0, profit: 0 };
-  gameState.message = '敵編成が公開されました。契約に必要な戦力だけを雇いましょう。';
+  gameState.economy = { reward: 0, bonusReward: 0, replacementCosts: 0, profit: 0, reputationGain: 0, bonusAchieved: false };
+  gameState.message = '契約オファーを比較し、採用方針に合う案件を選んでください。';
 }
 
-function rewardForDay(day) {
-  return CONFIG.economy.baseReward + (Math.max(1, day) - 1) * CONFIG.economy.dayReward;
+function selectContract(contractId) {
+  if (gameState.phase !== 'playing' || gameState.mode !== 'contracts') return;
+  const contract = gameState.contractOffers.find((item) => item.id === contractId);
+  if (!contract) return;
+  gameState.currentContract = contract;
+  gameState.market = generateMarket(contract);
+  setEnemyFormation(contract);
+  gameState.mode = 'planning';
+  gameState.economy = { reward: contract.reward, bonusReward: contract.bonusReward, replacementCosts: 0, profit: 0, reputationGain: 0, bonusAchieved: false };
+  gameState.message = `${contract.title}を受注。敵情報とボーナス条件を見て応募者を採用しましょう。`;
+}
+
+function currentReward() {
+  return gameState.currentContract ? gameState.currentContract.reward : 0;
 }
 
 function livingArmy() {
@@ -191,6 +290,11 @@ function startGame() {
   gameState.day = 1;
   gameState.gold = CONFIG.game.startingGold;
   gameState.army = [];
+  gameState.company = { reputation: 0, rank: 'E', totalProfit: 0, completedContracts: 0 };
+  gameState.investments = { recruitmentAd: 0, agencyPartnership: 0, premiumContractDesk: 0 };
+  gameState.speciesPreference = null;
+  gameState.currentContract = null;
+  gameState.contractOffers = [];
   gameState.counters.unit = 1;
   prepareDay();
 }
@@ -298,7 +402,7 @@ function startBattle() {
   if (enemies.length <= 0) return;
   gameState.mode = 'battle';
   gameState.battle = { elapsed: 0, tick: 0, log: ['契約履行開始。採用メンバーを評価します。'], enemies, stats: {} };
-  deployedArmy().forEach((unit) => { gameState.battle.stats[unit.id] = { name: unit.name, kills: 0, damage: 0 }; });
+  deployedArmy().forEach((unit) => { gameState.battle.stats[unit.id] = { name: unit.name, speciesId: unit.speciesId, color: unit.color, kills: 0, damage: 0 }; });
   gameState.message = '戦闘中です。指揮入力は受け付けません。';
 }
 
@@ -368,7 +472,7 @@ function doAttack(attacker, side) {
 
 function recordContribution(attacker, damage, killed) {
   if (!attacker || attacker.unitType !== 'monster' || !gameState.battle || !gameState.battle.stats) return;
-  if (!gameState.battle.stats[attacker.id]) gameState.battle.stats[attacker.id] = { name: attacker.name, kills: 0, damage: 0 };
+  if (!gameState.battle.stats[attacker.id]) gameState.battle.stats[attacker.id] = { name: attacker.name, speciesId: attacker.speciesId, color: attacker.color, kills: 0, damage: 0 };
   gameState.battle.stats[attacker.id].damage += Math.max(0, Math.round(damage || 0));
   if (killed) gameState.battle.stats[attacker.id].kills += 1;
 }
@@ -429,7 +533,8 @@ function contractPrediction() {
   const chance = army.length ? Math.max(8, Math.min(92, Math.round(50 + (armyPower - enemyPower) / Math.max(6, enemyPower) * 45))) : 0;
   const expectedDead = army.length ? Math.max(0, Math.min(army.length, Math.round((100 - chance) / 35))) : 0;
   const averageReplacement = army.length ? army.reduce((sum, unit) => sum + unit.hireCost * CONFIG.economy.replacementMultiplier, 0) / army.length : 0;
-  const projectedProfit = Math.round((rewardForDay(gameState.day) + CONFIG.economy.victoryBonus) * (chance / 100) - expectedDead * averageReplacement);
+  const projectedBase = currentReward() + (gameState.currentContract ? gameState.currentContract.bonusReward * 0.55 : 0);
+  const projectedProfit = Math.round(projectedBase * (chance / 100) - expectedDead * averageReplacement);
   const summary = chance >= 70 ? '有望な採用計画です。利益確保を狙えます。' : chance >= 45 ? '五分の契約です。対策要員の追加を検討。' : '危険な人員計画です。採用を見直してください。';
   return { chance, expectedDead, projectedProfit, summary };
 }
@@ -452,6 +557,66 @@ function employeeOfTheDay() {
   if (!best) return { name: '該当者なし', kills: 0, contribution: '配置メンバーがいません。' };
   const totalDamage = Math.max(1, stats.reduce((sum, item) => sum + (item.damage || 0), 0));
   return { name: best.name, kills: best.kills || 0, contribution: `総ダメージ貢献 ${Math.round((best.damage || 0) / totalDamage * 100)}%` };
+}
+
+
+function objectiveAchieved(victory, dead, baseProfit) {
+  const contract = gameState.currentContract;
+  if (!victory || !contract) return false;
+  const deployed = deployedArmy();
+  switch (contract.bonusObjective) {
+    case 'No Casualties': return dead.length === 0;
+    case 'Deploy 3 Units Or Less': return deployed.length <= 3;
+    case 'Use Human Slayer': return deployed.some((unit) => unit.traits && unit.traits.includes('humanSlayer'));
+    case 'Finish With Profit Above 100G': return baseProfit > 100;
+    case 'Complete Without Merged Units': return deployed.every((unit) => !unit.merged);
+    default: return false;
+  }
+}
+
+function calculateReputationGain(victory, bonusAchieved, profit, dead) {
+  if (!victory || !gameState.currentContract) return 0;
+  let gain = 10 + gameState.currentContract.difficulty * 6;
+  if (bonusAchieved) gain += 12;
+  if (profit >= 100) gain += 10;
+  else if (profit > 0) gain += 4;
+  if (dead.length === 0) gain += 8;
+  else if (dead.length <= 1) gain += 3;
+  return gain;
+}
+
+function gradeFromReport() {
+  const evaluation = reportEvaluation();
+  if (!evaluation) return '未評価';
+  return ['D', 'C', 'B', 'A', 'S'][evaluation.score - 1];
+}
+
+function purchaseInvestment(id) {
+  if (gameState.phase !== 'playing' || gameState.mode !== 'contracts') return;
+  const investment = CONFIG.investments.find((item) => item.id === id);
+  if (!investment) return;
+  const level = gameState.investments[id] || 0;
+  if (level >= investment.maxLevel) {
+    gameState.message = `${investment.name}は上限まで導入済みです。`;
+    return;
+  }
+  if (gameState.gold < investment.cost) {
+    gameState.message = `${investment.name}の導入には${investment.cost}G必要です。`;
+    return;
+  }
+  gameState.gold -= investment.cost;
+  gameState.investments[id] = level + 1;
+  if (id === 'agencyPartnership') gameState.speciesPreference = 'orc';
+  gameState.contractOffers = generateContractOffers();
+  gameState.message = `${investment.name}を導入。戦闘力ではなく、採用・契約の選択肢が広がりました。`;
+}
+
+function cycleSpeciesPreference() {
+  if (!gameState.investments.agencyPartnership || gameState.mode !== 'contracts') return;
+  const species = Object.keys(CONFIG.monsters);
+  const current = species.indexOf(gameState.speciesPreference);
+  gameState.speciesPreference = species[(current + 1) % species.length];
+  gameState.message = `提携エージェンシーの優先種族を${CONFIG.monsters[gameState.speciesPreference].name}に変更しました。`;
 }
 
 function enemySupportActions() {
@@ -482,24 +647,45 @@ function battleTick() {
   if (enemyAlive <= 0 || armyAlive <= 0 || gameState.battle.tick >= CONFIG.combat.maxTicks) finishBattle(enemyAlive <= 0 && armyAlive > 0);
 }
 
+
 function finishBattle(victory) {
   const dead = gameState.army.filter((unit) => unit && unit.alive === false);
   const replacementCosts = dead.reduce((sum, unit) => sum + (Number(unit.hireCost) || 0) * CONFIG.economy.replacementMultiplier, 0);
-  const reward = victory ? rewardForDay(gameState.day) + CONFIG.economy.victoryBonus : 0;
+  const baseReward = victory && gameState.currentContract ? gameState.currentContract.reward : 0;
+  const baseProfit = baseReward - replacementCosts;
+  const bonusAchieved = objectiveAchieved(victory, dead, baseProfit);
+  const bonusReward = bonusAchieved && gameState.currentContract ? gameState.currentContract.bonusReward : 0;
+  const reward = baseReward + bonusReward;
   const profit = reward - replacementCosts;
+  const reputationGain = calculateReputationGain(victory, bonusAchieved, profit, dead);
   gameState.gold += profit;
-  gameState.economy = { reward, replacementCosts, profit };
-  gameState.report = { victory, dead: dead.map((unit) => unit.name), survived: livingArmy().map((unit) => unit.name) };
+  gameState.company.totalProfit += profit;
+  if (victory) gameState.company.completedContracts += 1;
+  gameState.company.reputation += reputationGain;
+  gameState.company.rank = rankForReputation(gameState.company.reputation);
+  gameState.economy = { reward: baseReward, bonusReward, replacementCosts, profit, reputationGain, bonusAchieved };
+  gameState.report = {
+    victory,
+    bonusAchieved,
+    dead: dead.map((unit) => unit.name),
+    survived: livingArmy().map((unit) => unit.name),
+    contractTitle: gameState.currentContract ? gameState.currentContract.title : '未選択契約',
+    grade: '未評価',
+  };
+  gameState.report.grade = gradeFromReport();
   gameState.army = livingArmy().map((unit) => ({ ...unit, hp: unit.maxHp, row: unit.row, slot: unit.slot }));
   normalizeFormation();
   gameState.mode = 'report';
-  gameState.message = victory ? '契約完了。次へ進む前に利益を確認してください。' : '契約失敗。悪い採用判断は高くつきます。';
-  if (gameState.gold <= 0 || livingArmy().length <= 0) {
+  gameState.message = victory ? '契約評価が届きました。利益・信用・投資余力を確認してください。' : '契約失敗。信用は増えません。採用判断を見直しましょう。';
+  if (gameState.currentContract && gameState.currentContract.heroContract && victory) {
     gameState.phase = 'gameover';
-    gameState.message = gameState.gold <= 0 ? '敗北: ゴールドが尽きました。' : '敗北: 配置可能なユニットが残っていません。';
-  } else if (victory && gameState.day >= CONFIG.game.maxDay) {
+    gameState.message = '勝利: Hero Elimination Contractを完了し、魔物 staffing 業界の頂点に立ちました。';
+  } else if (rankIndex(gameState.company.rank) >= rankIndex(CONFIG.game.winRank)) {
     gameState.phase = 'gameover';
-    gameState.message = '勝利: 10日目を生き残り、派遣センターの資金繰りを守りました。';
+    gameState.message = `勝利: 信用ランク${CONFIG.game.winRank}に到達し、最も尊敬される魔物派遣会社になりました。`;
+  } else if (gameState.gold <= 0) {
+    gameState.phase = 'gameover';
+    gameState.message = '敗北: 運転資金が尽きました。';
   }
 }
 
@@ -520,6 +706,9 @@ function processAction(action) {
   if (!action || !action.type) return;
   if (action.type === 'start') startGame();
   if (action.type === 'hire') hire(action.id);
+  if (action.type === 'contract') selectContract(action.id);
+  if (action.type === 'investment') purchaseInvestment(action.id);
+  if (action.type === 'speciesPreference') cycleSpeciesPreference();
   if (action.type === 'selectUnit') selectUnit(action.id);
   if (action.type === 'slot') assignSlot(action.row, action.slot);
   if (action.type === 'bench') benchSelected();
@@ -532,9 +721,9 @@ function update(deltaMs) {
   safeCleanup();
   const actions = Array.isArray(gameState.input.actions) ? gameState.input.actions.splice(0) : [];
   actions.forEach(processAction);
-  if (gameState.phase === 'playing' && gameState.gold <= 0) {
+  if (gameState.phase === 'playing' && gameState.gold <= 0 && gameState.mode !== 'report') {
     gameState.phase = 'gameover';
-    gameState.message = '敗北: ゴールドが尽きました。';
+    gameState.message = '敗北: 運転資金が尽きました。';
   }
   if (gameState.phase === 'playing' && gameState.mode === 'battle' && gameState.battle) {
     gameState.battle.elapsed += deltaMs;
@@ -692,7 +881,7 @@ function rowLabel(row) {
 }
 
 function modeLabel(mode) {
-  const labels = { planning: '採用・編成', battle: '自動戦闘', report: '報告確認' };
+  const labels = { contracts: '契約選定', planning: '採用・編成', battle: '自動戦闘', report: '契約評価' };
   return labels[mode] || '開始前';
 }
 
@@ -738,16 +927,16 @@ function drawStart() {
   ctx.fillStyle = panelFill(0, 0, CONFIG.canvas.width, CONFIG.canvas.height, '#95d5f5', '#f5cf8a');
   ctx.fillRect(0, 0, CONFIG.canvas.width, CONFIG.canvas.height);
   rect(300, 130, 680, 220, panelFill(300, 130, 680, 220, '#9c622f', '#623719'), '#4c2b17', 22, 5);
-  text('魔王軍派遣センター', 640, 165, 44, '#ffd965', 'center', '900');
-  text('～ 魔物人材で勝利と利益を掴め！ ～', 640, 220, 22, '#fff2bd', 'center', '900');
-  text('敵を分析し、カードから採用し、卓上ボードへ配置して契約へ派遣しましょう。', 640, 282, 17, '#fff7de', 'center', '800');
-  button('start', '求人ボードを開く', 505, 400, 270, 58, { type: 'start' });
+  text('Demon Army Dispatch Center', 640, 165, 40, '#ffd965', 'center', '900');
+  text('～ 魔王軍へ兵力を供給する魔物人材会社 ～', 640, 220, 22, '#fff2bd', 'center', '900');
+  text('契約を選び、敵情報を読み、効率よく採用して信用ランクAを目指しましょう。', 640, 282, 17, '#fff7de', 'center', '800');
+  button('start', '契約デスクを開く', 505, 400, 270, 58, { type: 'start' });
 }
 
 function drawHeader() {
-  drawRibbon(`Day ${gameState.day} / ${CONFIG.game.maxDay}　${modeLabel(gameState.mode)}`, 320, 12, 330, CONFIG.ui.purple, '📅');
+  drawRibbon(`Contract ${gameState.day}　${modeLabel(gameState.mode)}`, 320, 12, 330, CONFIG.ui.purple, '📜');
   rect(26, 10, 250, 40, panelFill(26, 10, 250, 40, '#5e3a1d', '#321e12'), '#8a5a2b', 12, 3);
-  text('魔王軍派遣センター', 44, 20, 21, '#ffe58b', 'left', '900');
+  text('Demon Army Dispatch Center', 44, 20, 18, '#ffe58b', 'left', '900');
   rect(1060, 10, 190, 40, panelFill(1060, 10, 190, 40, '#fff0b8', '#f3b743'), '#8a5a2b', 12, 3);
   text(`🪙 ${gameState.gold}G`, 1155, 18, 24, '#563414', 'center', '900');
   text(gameState.message, 675, 48, 14, CONFIG.ui.ink, 'center', '800');
@@ -767,17 +956,20 @@ function drawBar(label, value, maxValue, x, y, w, color) {
 }
 
 function drawEnemyPanel() {
-  drawPanel('敵軍インテリジェンス', 20, 64, 410, 246, { variant: 'parchment', banner: CONFIG.ui.red, icon: '⚔' });
+  drawPanel('Today’s Contract / Enemy Intelligence', 20, 64, 410, 246, { variant: 'parchment', banner: CONFIG.ui.red, icon: '⚔' });
   const enemies = [...gameState.enemyFormation.front, ...gameState.enemyFormation.back];
   const intel = enemyIntelligence();
-  text(`Human Presence: ${intel.humanPresence >= 75 ? 'High' : intel.humanPresence >= 45 ? 'Medium' : 'Low'}`, 38, 96, 17, CONFIG.ui.red, 'left', '900');
+  const contract = gameState.currentContract;
+  text(contract ? contract.title : '契約を選択してください', 38, 94, 15, CONFIG.ui.ink, 'left', '900');
+  if (contract) text(`Reward ${contract.reward}G / Bonus ${contract.bonusReward}G: ${contract.bonusObjective}`, 38, 112, 12, CONFIG.ui.gold, 'left', '900');
+  text(`Human Presence: ${intel.humanPresence >= 75 ? 'High' : intel.humanPresence >= 45 ? 'Medium' : 'Low'}`, 38, 128, 14, CONFIG.ui.red, 'left', '900');
   enemies.slice(0, 4).forEach((enemy, index) => {
     const x = 36 + index * 94;
-    rect(x, 122, 82, 72, '#fff7df', '#b8844b', 12, 2);
-    drawUnit(enemy, x + 6, 128, 70, 58);
-    drawPill(`×${enemies.filter((e) => e.enemyId === enemy.enemyId).length}`, x + 52, 126, 28, CONFIG.ui.red);
+    rect(x, 146, 82, 54, '#fff7df', '#b8844b', 12, 2);
+    drawUnit(enemy, x + 6, 150, 70, 44);
+    drawPill(`×${enemies.filter((e) => e.enemyId === enemy.enemyId).length}`, x + 52, 148, 28, CONFIG.ui.red);
   });
-  if (enemies.length > 4) text(`+${enemies.length - 4}`, 398, 150, 18, CONFIG.ui.gold, 'center', '900');
+  if (enemies.length > 4) text(`+${enemies.length - 4}`, 398, 168, 18, CONFIG.ui.gold, 'center', '900');
   drawBar('人間存在率', intel.humanPresence, 100, 38, 212, 86, CONFIG.ui.red);
   drawBar('前線脅威', intel.frontlineThreat, 90, 38, 236, 86, CONFIG.ui.orange);
   drawBar('後方火力', intel.backlineThreat, 80, 38, 260, 86, CONFIG.ui.blue);
@@ -787,24 +979,54 @@ function drawEnemyPanel() {
 }
 
 function drawMarketPanel() {
-  drawPanel('モンスター応募者（求人市場）', 450, 64, 810, 246, { variant: 'parchment', banner: CONFIG.ui.blue, icon: '☄' });
-  text('カードをクリックして採用：役割・特性を先に見て、数字はあとで確認。', 674, 96, 13, CONFIG.ui.muted, 'left', '800');
+  if (gameState.mode === 'contracts') {
+    drawPanel('契約オファー / Company Investments', 450, 64, 810, 246, { variant: 'contract', banner: CONFIG.ui.purple, icon: '📜' });
+    text('案件を選ぶ前に、利益を使って採用・契約の選択肢だけを拡張できます（戦闘ボーナスなし）。', 476, 96, 13, CONFIG.ui.muted, 'left', '800');
+    gameState.contractOffers.forEach((contract, index) => {
+      const x = 468 + index * 188;
+      const y = 124;
+      rect(x, y, 174, 114, '#fff9e7', '#8a5a2b', 14, 3);
+      text(contract.title, x + 10, y + 12, 14, CONFIG.ui.ink, 'left', '900');
+      text(`Reward ${contract.reward}G`, x + 10, y + 38, 13, CONFIG.ui.green, 'left', '900');
+      text(`Difficulty ${'★'.repeat(contract.difficulty)}`, x + 10, y + 58, 12, CONFIG.ui.red, 'left', '800');
+      text(`Bonus +${contract.bonusReward}G`, x + 10, y + 78, 12, CONFIG.ui.gold, 'left', '900');
+      wrapText(contract.bonusObjective, x + 96, y + 76, 66, 12, 10, CONFIG.ui.purple, '900');
+      gameState.input.cards.push({ x, y, w: 174, h: 114, action: { type: 'contract', id: contract.id }, enabled: true });
+    });
+    CONFIG.investments.forEach((investment, index) => {
+      const x = 468 + index * 188;
+      const y = 248;
+      const level = gameState.investments[investment.id] || 0;
+      const enabled = level < investment.maxLevel && gameState.gold >= investment.cost;
+      button(`invest_${investment.id}`, `${investment.name} ${investment.cost}G`, x, y, 174, 24, { type: 'investment', id: investment.id }, enabled);
+      text(`Lv ${level}/${investment.maxLevel} ${investment.description}`, x, y + 30, 11, CONFIG.ui.muted, 'left', '800');
+    });
+    if (gameState.investments.agencyPartnership) {
+      const monster = CONFIG.monsters[gameState.speciesPreference] || CONFIG.monsters.orc;
+      button('speciesPreference', `優先: ${monster.name}`, 1048, 248, 174, 24, { type: 'speciesPreference' }, true);
+    }
+    return;
+  }
+  drawPanel('Monster Applicants（応募者）', 450, 64, 810, 246, { variant: 'parchment', banner: CONFIG.ui.blue, icon: '☄' });
+  text('カードをクリックして採用：契約条件に合う応募者だけを効率よく雇用。', 674, 96, 13, CONFIG.ui.muted, 'left', '800');
+  const cardW = Math.max(106, Math.floor(760 / Math.max(1, gameState.market.length)) - 8);
+  const gap = 8;
   gameState.market.forEach((card, index) => {
     const monster = CONFIG.monsters[card.speciesId];
     if (!monster) return;
-    const x = 464 + index * 156;
+    const x = 464 + index * (cardW + gap);
     const y = 112;
     const frameColor = monster.preferredRow === 'front' ? CONFIG.ui.green : CONFIG.ui.blue;
-    rect(x, y, 146, 180, panelFill(x, y, 146, 180, card.sold ? '#dcc9aa' : '#fff9e6', card.sold ? '#bfa988' : '#efd09b'), card.sold ? '#9b8464' : frameColor, 16, 3);
-    text(monster.name, x + 73, y + 10, 20, card.sold ? CONFIG.ui.muted : CONFIG.ui.ink, 'center', '900');
-    drawPill(monster.role, x + 14, y + 36, 118, frameColor);
-    rect(x + 14, y + 64, 118, 82, panelFill(x, y, 118, 82, '#dff2ff', '#bcdcf0'), '#9c6a35', 12, 2);
+    rect(x, y, cardW, 180, panelFill(x, y, 146, 180, card.sold ? '#dcc9aa' : '#fff9e6', card.sold ? '#bfa988' : '#efd09b'), card.sold ? '#9b8464' : frameColor, 16, 3);
+    text(monster.name, x + cardW / 2, y + 10, 20, card.sold ? CONFIG.ui.muted : CONFIG.ui.ink, 'center', '900');
+    drawPill(monster.role, x + 8, y + 36, cardW - 16, frameColor);
+    rect(x + 10, y + 64, cardW - 20, 82, panelFill(x, y, 118, 82, '#dff2ff', '#bcdcf0'), '#9c6a35', 12, 2);
     const imageKey = `cards.${monster.id}.${monster.preferredRow}.idle`;
-    safeDrawImage(ctx, gameState.assets.images[imageKey], x + 16, y + 60, 114, 88, () => drawMonsterFallback({ ...monster, speciesId: monster.id, color: monster.color }, x + 16, y + 58, 114, 90));
-    drawPill(card.sold ? '雇用済' : `${monster.hireCost}G`, x + 90, y + 154, 44, CONFIG.ui.gold, '#3b2517');
-    drawPill(monster.specialty, x + 12, y + 154, 72, CONFIG.ui.purple);
-    wrapText(monster.statement, x + 14, y + 181, 118, 13, 10, '#5d3a1f', '900');
-    gameState.input.cards.push({ x, y, w: 146, h: 180, action: { type: 'hire', id: card.id }, enabled: !card.sold });
+    safeDrawImage(ctx, gameState.assets.images[imageKey], x + 12, y + 60, cardW - 24, 88, () => drawMonsterFallback({ ...monster, speciesId: monster.id, color: monster.color }, x + 12, y + 58, cardW - 24, 90));
+    drawPill(card.sold ? '済' : `${monster.hireCost}G`, x + cardW - 52, y + 154, 44, CONFIG.ui.gold, '#3b2517');
+    drawPill(monster.specialty, x + 8, y + 154, Math.min(72, cardW - 62), CONFIG.ui.purple);
+    wrapText(monster.statement, x + 10, y + 181, cardW - 20, 13, 10, '#5d3a1f', '900');
+    gameState.input.cards.push({ x, y, w: cardW, h: 180, action: { type: 'hire', id: card.id }, enabled: !card.sold });
   });
 }
 
@@ -874,12 +1096,14 @@ function drawReportPanel() {
   drawPanel('前回の戦闘結果', 580, 474, 300, 286, { variant: 'celebration', banner: CONFIG.ui.purple, icon: '★' });
   if (gameState.report) {
     const evaluation = reportEvaluation();
-    text('★★★★★ Hiring Evaluation', 604, 510, 18, '#8a4b18', 'left', '900');
-    text(evaluation.stars, 604, 540, 30, '#ffcf33', 'left', '900');
-    drawPill(gameState.report.victory ? '契約成功' : '契約失敗', 604, 580, 112, gameState.report.victory ? CONFIG.ui.green : CONFIG.ui.red);
-    text(`Profit ${gameState.economy.profit >= 0 ? '+' : ''}${gameState.economy.profit}G`, 604, 616, 24, gameState.economy.profit >= 0 ? CONFIG.ui.green : CONFIG.ui.red, 'left', '900');
-    text(`損耗: ${gameState.report.dead.length ? gameState.report.dead.join('、') : 'なし'}`, 604, 650, 13, CONFIG.ui.ink, 'left', '800');
-    wrapText(gameState.report.victory ? '完璧な採用だったよ！損耗ゼロなら大勝利！' : '対策カードを優先して次の契約へ備えよう。', 604, 682, 248, 16, 13, '#5d3a1f', '900');
+    text('Contract Evaluation', 604, 510, 18, '#8a4b18', 'left', '900');
+    text(`${evaluation.stars} Grade ${gameState.report.grade}`, 604, 540, 22, '#ffcf33', 'left', '900');
+    drawPill(gameState.report.victory ? '契約成功' : '契約失敗', 604, 576, 112, gameState.report.victory ? CONFIG.ui.green : CONFIG.ui.red);
+    drawPill(gameState.economy.bonusAchieved ? 'Bonus達成' : 'Bonus未達', 728, 576, 112, gameState.economy.bonusAchieved ? CONFIG.ui.purple : CONFIG.ui.muted);
+    text(`Profit ${gameState.economy.profit >= 0 ? '+' : ''}${gameState.economy.profit}G`, 604, 616, 22, gameState.economy.profit >= 0 ? CONFIG.ui.green : CONFIG.ui.red, 'left', '900');
+    text(`Reputation +${gameState.economy.reputationGain}`, 604, 646, 16, CONFIG.ui.purple, 'left', '900');
+    text(`損耗: ${gameState.report.dead.length ? gameState.report.dead.join('、') : 'なし'}`, 604, 672, 13, CONFIG.ui.ink, 'left', '800');
+    wrapText(gameState.report.victory ? '利益・損耗・目的達成から信用を算出。単純な周回では信用は増えません。' : '対策カードを優先して次の契約へ備えよう。', 604, 704, 248, 16, 13, '#5d3a1f', '900');
   } else {
     text('戦闘後に採用評価を表示', 604, 530, 18, '#8a4b18', 'left', '900');
     text('★★★★★', 604, 568, 28, '#d6ba7c', 'left', '900');
@@ -902,18 +1126,23 @@ function drawMvpPanel() {
   }
 }
 
+
 function drawEconomyPanel() {
-  drawPanel('経済サマリー', 1100, 474, 160, 286, { variant: 'ledger', banner: CONFIG.ui.orange, icon: '🪙' });
+  drawPanel('Company Reputation', 1100, 474, 160, 286, { variant: 'ledger', banner: CONFIG.ui.orange, icon: '🏢' });
   text('所持ゴールド', 1118, 512, 13, '#6a4327', 'left', '900');
   text(`${gameState.gold}G`, 1118, 534, 26, '#8a4b18', 'left', '900');
-  rect(1118, 580, 124, 82, '#fff8df', '#d4a15e', 12, 2);
-  text(`報酬 +${gameState.economy.reward}G`, 1130, 594, 13, CONFIG.ui.green, 'left', '900');
-  text(`補填 -${gameState.economy.replacementCosts}G`, 1130, 622, 13, CONFIG.ui.red, 'left', '900');
+  text('信用ランク', 1118, 568, 13, '#6a4327', 'left', '900');
+  text(gameState.company.rank, 1118, 590, 34, CONFIG.ui.purple, 'left', '900');
+  text(`Rep ${gameState.company.reputation}`, 1174, 586, 14, CONFIG.ui.ink, 'left', '900');
+  rect(1118, 620, 124, 76, '#fff8df', '#d4a15e', 12, 2);
+  text(`総利益 ${gameState.company.totalProfit}G`, 1130, 634, 12, CONFIG.ui.green, 'left', '900');
+  text(`完了 ${gameState.company.completedContracts}`, 1130, 656, 12, CONFIG.ui.ink, 'left', '900');
+  text(`今回Rep +${gameState.economy.reputationGain}`, 1130, 678, 12, CONFIG.ui.purple, 'left', '900');
   const profitColor = gameState.economy.profit >= 0 ? CONFIG.ui.green : CONFIG.ui.red;
-  text('純利益', 1118, 678, 13, '#6a4327', 'left', '900');
-  text(`${gameState.economy.profit >= 0 ? '+' : ''}${gameState.economy.profit}G`, 1118, 698, 27, profitColor, 'left', '900');
-  if (gameState.mode === 'report' && gameState.phase === 'playing') button('continue', '翌日へ', 1118, 728, 124, 26, { type: 'continue' });
-  if (gameState.phase === 'gameover') button('restart', '再開', 1118, 728, 124, 26, { type: 'restart' });
+  text('今回純利益', 1118, 708, 13, '#6a4327', 'left', '900');
+  text(`${gameState.economy.profit >= 0 ? '+' : ''}${gameState.economy.profit}G`, 1118, 728, 23, profitColor, 'left', '900');
+  if (gameState.mode === 'report' && gameState.phase === 'playing') button('continue', '次の契約へ', 1118, 752, 124, 26, { type: 'continue' });
+  if (gameState.phase === 'gameover') button('restart', '再開', 1118, 752, 124, 26, { type: 'restart' });
 }
 
 function render() {
