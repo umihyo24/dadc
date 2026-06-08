@@ -7,10 +7,19 @@ const CONFIG = Object.freeze({
   canvas: { width: 1280, height: 820 },
   game: { startingGold: 260, startingReputation: 0, baseContractChoices: 3, winRank: 'A' },
   formation: { frontSlots: 3, backSlots: 3 },
-  personnel: { fatiguePerDeployment: 25, fatigueRecoveryPerContract: 15, fatigueWarnAt: 70, fatigueUnavailableAt: 100, injuryHpRatio: 0.23, injuryContracts: 2 },
+  personnel: { fatiguePerDeployment: 25, fatigueRecoveryPerContract: 15, fatigueWarnAt: 70, fatigueUnavailableAt: 100, injuryHpRatio: 0.23, injuryContracts: 2, maxSpecializationTags: null },
   economy: { replacementCostPerCasualty: 35 },
   combat: { tickMs: 430, maxTicks: 95, minBattleMs: 3000, baseAccuracy: 0.9, evasionPenalty: 0.22, physicalResistanceMultiplier: 0.55, areaSplashMultiplier: 0.45, healerAmount: 8 },
   ui: { ink: '#352113', muted: '#785838', parchment: '#fff4d8', panel: '#ffe8b4', wood: '#7f4a24', gold: '#d88922', red: '#c94f45', green: '#3d9b5f', blue: '#2f83bd', purple: '#8652b8', dark: '#17130f', trait: '#ffe05f' },
+  specializations: {
+    humanHunter: { label: '人間狩り', condition: 'humanKills', threshold: 10, wageIncrease: 8, bonusType: 'damageVsFaction', target: 'Human', multiplier: 1.1, description: '人間勢力への与ダメージ +10%' },
+    undeadSpecialist: { label: '不死者専門', condition: 'undeadKills', threshold: 10, wageIncrease: 8, bonusType: 'damageVsFaction', target: 'Undead', multiplier: 1.1, description: '不死者勢力への与ダメージ +10%' },
+    archerBreaker: { label: '弓兵崩し', condition: 'archerKills', threshold: 6, wageIncrease: 7, bonusType: 'damageVsEnemyId', target: 'archer', multiplier: 1.12, description: '弓兵への与ダメージ +12%' },
+    fortressBreaker: { label: '城塞崩し', condition: 'armoredKills', threshold: 6, wageIncrease: 9, bonusType: 'damageVsArmored', targetArmorAtLeast: 2, multiplier: 1.1, description: '装甲2以上の敵への与ダメージ +10%' },
+    frontlineVeteran: { label: '前線古参', condition: 'frontlineDeployments', threshold: 10, wageIncrease: 6, bonusType: 'frontlineDamageReduction', multiplier: 0.92, description: '前衛配置中だけ被ダメージ -8%' },
+    survivor: { label: '生還者', condition: 'battlesSurvived', threshold: 8, wageIncrease: 5, bonusType: 'injuryRiskReduction', multiplier: 0.75, description: '生還時の負傷判定HPしきい値 -25%' },
+    mvpRegular: { label: '常連MVP', condition: 'mvpCount', threshold: 3, wageIncrease: 10, bonusType: 'survivalReputationBonus', reputationBonus: 4, description: '生還時に信用 +4' },
+  },
   traits: {
     humanSlayer: { label: '人間特攻', description: '人間系に追加ダメージ' },
     evasion: { label: '回避', description: '敵の命中率を低下' },
@@ -83,15 +92,25 @@ function deployedPersonnel() { return gameState.personnel.filter((u) => u.row); 
 function livingPersonnel() { return gameState.personnel; }
 function activeContract() { return gameState.contracts.find((c) => c.id === gameState.selectedContractId); }
 function isAvailable(unit) { return unit.injuryContractsRemaining <= 0 && unit.fatigue < CONFIG.personnel.fatigueUnavailableAt; }
-function laborCost(units = deployedPersonnel()) { return units.reduce((sum, u) => sum + u.wage, 0); }
+function baseWage(unit) { return species(unit.species).wage; }
+function specializationConfig(tag) { return CONFIG.specializations[tag]; }
+function specializationLabels(unit) { return (unit.specializationTags || []).map((tag) => specializationConfig(tag)?.label || tag); }
+function specializationPremium(unit) { return (unit.specializationTags || []).reduce((sum, tag) => sum + (specializationConfig(tag)?.wageIncrease || 0), 0); }
+function finalWage(unit) { return baseWage(unit) + specializationPremium(unit); }
+function recalculateWage(unit) { unit.wage = finalWage(unit); return unit.wage; }
+function laborCost(units = deployedPersonnel()) { return units.reduce((sum, u) => sum + finalWage(u), 0); }
 function replacementCost(deadCount) { return deadCount * CONFIG.economy.replacementCostPerCasualty; }
 function projectedProfit(contract = activeContract()) { if (!contract) return 0; return contract.baseReward - laborCost(); }
+function deployedSpecializationPremium() { return deployedPersonnel().reduce((sum, u) => sum + specializationPremium(u), 0); }
 function fatigueStatus(unit) { if (unit.injuryContractsRemaining > 0) return `負傷 ${unit.injuryContractsRemaining}件`; if (unit.fatigue >= CONFIG.personnel.fatigueUnavailableAt) return '疲労限界'; if (unit.fatigue >= CONFIG.personnel.fatigueWarnAt) return '疲労警告'; return '勤務可'; }
 
+function emptyExperienceRecords() { return { humanKills: 0, undeadKills: 0, archerKills: 0, armoredKills: 0, battlesSurvived: 0, mvpCount: 0, frontlineDeployments: 0 }; }
 function createPersonnel(speciesId) {
   const s = species(speciesId);
   const serial = String(gameState.nextSerial++).padStart(3, '0');
-  return { id: `${speciesId}-${serial}-${Date.now()}-${Math.random().toString(16).slice(2)}`, species: speciesId, name: `${s.name} #${serial}`, wage: s.wage, fatigue: 0, injuryContractsRemaining: 0, dispatchCount: 0, kills: 0, survivalCount: 0, mvpCount: 0, totalProfitContribution: 0, row: null, slot: null };
+  const unit = { id: `${speciesId}-${serial}-${Date.now()}-${Math.random().toString(16).slice(2)}`, species: speciesId, name: `${s.name} #${serial}`, wage: s.wage, fatigue: 0, injuryContractsRemaining: 0, dispatchCount: 0, kills: 0, survivalCount: 0, mvpCount: 0, specializationTags: [], experienceRecords: emptyExperienceRecords(), totalProfitContribution: 0, row: null, slot: null };
+  recalculateWage(unit);
+  return unit;
 }
 function addCandidate(speciesId) { gameState.candidates.push(createPersonnel(speciesId)); }
 function addPersonnel(speciesId) { gameState.personnel.push(createPersonnel(speciesId)); }
@@ -134,7 +153,7 @@ function refreshContracts() {
 
 function buildCombatantFromPersonnel(unit) {
   const s = species(unit.species);
-  return { ...clone(s), personnelId: unit.id, displayName: unit.name, unitType: 'monster', name: unit.name, wage: unit.wage, maxHp: s.hp, hp: s.hp, row: unit.row, slot: unit.slot, alive: true, kills: 0, attackTimer: randInt(0, 500), lastHitMs: 0, attackAnimMs: 0 };
+  return { ...clone(s), personnelId: unit.id, displayName: unit.name, unitType: 'monster', name: unit.name, wage: finalWage(unit), specializationTags: [...(unit.specializationTags || [])], maxHp: s.hp, hp: s.hp, row: unit.row, slot: unit.slot, alive: true, kills: 0, killFactions: {}, killEnemyIds: {}, armoredKills: 0, attackTimer: randInt(0, 500), lastHitMs: 0, attackAnimMs: 0 };
 }
 function buildEnemy(id, index) {
   const e = enemyDef(id);
@@ -153,24 +172,52 @@ function selectTarget(attacker, targets) {
   if ((attacker.traits || []).includes('backlineAttack')) return living.find((u) => u.row === 'back') || living[0];
   return living.find((u) => u.row === 'front') || living[0];
 }
+function hasSpecialization(unit, tag) { return (unit.specializationTags || []).includes(tag); }
+function applySpecializationDamageBonuses(attacker, target, damage) {
+  if (attacker.unitType !== 'monster') return damage;
+  return (attacker.specializationTags || []).reduce((amount, tag) => {
+    const spec = specializationConfig(tag);
+    if (!spec) return amount;
+    if (spec.bonusType === 'damageVsFaction' && target.faction === spec.target) return amount * spec.multiplier;
+    if (spec.bonusType === 'damageVsEnemyId' && target.id === spec.target) return amount * spec.multiplier;
+    if (spec.bonusType === 'damageVsArmored' && (target.armor || 0) >= (spec.targetArmorAtLeast || 1)) return amount * spec.multiplier;
+    return amount;
+  }, damage);
+}
+function applySpecializationDefenseBonuses(defender, damage) {
+  if (defender.unitType !== 'monster' || defender.row !== 'front') return damage;
+  return (defender.specializationTags || []).reduce((amount, tag) => {
+    const spec = specializationConfig(tag);
+    return spec?.bonusType === 'frontlineDamageReduction' ? amount * spec.multiplier : amount;
+  }, damage);
+}
+function recordKill(attacker, target) {
+  attacker.kills = (attacker.kills || 0) + 1;
+  if (attacker.unitType !== 'monster') return;
+  attacker.killFactions[target.faction] = (attacker.killFactions[target.faction] || 0) + 1;
+  attacker.killEnemyIds[target.id] = (attacker.killEnemyIds[target.id] || 0) + 1;
+  if ((target.armor || 0) >= 2) attacker.armoredKills = (attacker.armoredKills || 0) + 1;
+}
 function dealDamage(attacker, target, allTargets) {
   if (!attacker || !target) return;
   const evasion = (target.traits || []).includes('evasion') ? CONFIG.combat.evasionPenalty : 0;
   if (Math.random() > CONFIG.combat.baseAccuracy - evasion) { pushLog(`${attacker.name} の攻撃を ${target.name} が回避。`); return; }
   let damage = attacker.attack + randInt(-2, 3) - (target.armor || 0);
   if ((attacker.traits || []).includes('humanSlayer') && target.faction === 'Human') damage += 6;
+  damage = applySpecializationDamageBonuses(attacker, target, damage);
   if (attacker.damageType === 'physical' && (target.traits || []).includes('physicalResistance')) damage *= CONFIG.combat.physicalResistanceMultiplier;
+  damage = applySpecializationDefenseBonuses(target, damage);
   damage = Math.max(2, Math.round(damage));
   target.hp = Math.max(0, target.hp - damage); target.lastHitMs = 350; attacker.attackAnimMs = 250;
   pushLog(`${attacker.name} → ${target.name} ${damage} damage`);
-  if (target.hp <= 0 && target.alive) { target.alive = false; attacker.kills = (attacker.kills || 0) + 1; pushLog(`${target.name} down.`); }
+  if (target.hp <= 0 && target.alive) { target.alive = false; recordKill(attacker, target); pushLog(`${target.name} down.`); }
   if ((attacker.traits || []).includes('areaAttack')) {
     const splash = alive(allTargets).find((u) => u !== target);
     if (splash) {
       const splashDamage = Math.max(2, Math.round(damage * CONFIG.combat.areaSplashMultiplier));
       splash.hp = Math.max(0, splash.hp - splashDamage); splash.lastHitMs = 350;
       pushLog(`${attacker.name} の範囲攻撃 → ${splash.name} ${splashDamage}`);
-      if (splash.hp <= 0 && splash.alive) { splash.alive = false; attacker.kills = (attacker.kills || 0) + 1; }
+      if (splash.hp <= 0 && splash.alive) { splash.alive = false; recordKill(attacker, splash); }
     }
   }
 }
@@ -221,40 +268,97 @@ function reputationGain(contract, victory, bonus, dead) {
   if (['High', 'Critical', 'Heroic'].includes(contract.riskLabel)) gain += 16;
   return gain;
 }
+
+function addExperience(unit, key, amount = 1) {
+  unit.experienceRecords = { ...emptyExperienceRecords(), ...(unit.experienceRecords || {}) };
+  unit.experienceRecords[key] = (unit.experienceRecords[key] || 0) + amount;
+}
+function syncLegacyExperience(unit) {
+  unit.experienceRecords = { ...emptyExperienceRecords(), ...(unit.experienceRecords || {}) };
+  unit.experienceRecords.battlesSurvived = Math.max(unit.experienceRecords.battlesSurvived, unit.survivalCount || 0);
+  unit.experienceRecords.mvpCount = Math.max(unit.experienceRecords.mvpCount, unit.mvpCount || 0);
+}
+function evaluateSpecializations(unit) {
+  syncLegacyExperience(unit);
+  unit.specializationTags = unit.specializationTags || [];
+  const gained = [];
+  Object.entries(CONFIG.specializations).forEach(([tag, spec]) => {
+    const cap = CONFIG.personnel.maxSpecializationTags;
+    if (cap !== null && unit.specializationTags.length >= cap) return;
+    if (!unit.specializationTags.includes(tag) && (unit.experienceRecords[spec.condition] || 0) >= spec.threshold) {
+      unit.specializationTags.push(tag);
+      gained.push(tag);
+    }
+  });
+  recalculateWage(unit);
+  return gained;
+}
+function survivorInjuryRatio(unit) {
+  return (unit.specializationTags || []).reduce((ratio, tag) => {
+    const spec = specializationConfig(tag);
+    return spec?.bonusType === 'injuryRiskReduction' ? ratio * spec.multiplier : ratio;
+  }, CONFIG.personnel.injuryHpRatio);
+}
+function survivedMvpReputationBonus(deployed, battleAllies) {
+  return deployed.reduce((sum, unit) => {
+    const combatant = battleAllies.find((a) => a.personnelId === unit.id);
+    if (!combatant?.alive) return sum;
+    return sum + (unit.specializationTags || []).reduce((unitSum, tag) => {
+      const spec = specializationConfig(tag);
+      return unitSum + (spec?.bonusType === 'survivalReputationBonus' ? spec.reputationBonus || 0 : 0);
+    }, 0);
+  }, 0);
+}
+function formatSpecializationList(tags) { return tags.map((tag) => specializationConfig(tag)?.label || tag).join(' / '); }
+
 function finishBattle() {
   const b = gameState.battle; const c = activeContract(); if (!b || !c) return;
   b.finished = true;
   const victory = alive(b.enemies).length === 0 && alive(b.allies).length > 0;
   const deployed = deployedPersonnel();
   const deadCombatants = b.allies.filter((u) => !u.alive || u.hp <= 0);
+  const battleLabor = laborCost(deployed);
   const deadNames = deadCombatants.map((u) => u.displayName);
   const injured = [];
+  const specializationResults = [];
+  const mvpCombatant = b.allies.slice().sort((a, z) => (z.kills || 0) - (a.kills || 0) || z.hp - a.hp)[0];
+  const mvp = mvpCombatant ? deployed.find((u) => u.id === mvpCombatant.personnelId) : null;
   deployed.forEach((u) => {
     const combatant = b.allies.find((a) => a.personnelId === u.id);
+    const oldWage = finalWage(u);
+    const oldMvp = u.mvpCount;
     u.dispatchCount += 1; u.fatigue = Math.min(140, u.fatigue + CONFIG.personnel.fatiguePerDeployment); u.kills += combatant?.kills || 0;
+    if (u.row === 'front') addExperience(u, 'frontlineDeployments', 1);
+    addExperience(u, 'humanKills', combatant?.killFactions?.Human || 0);
+    addExperience(u, 'undeadKills', combatant?.killFactions?.Undead || 0);
+    addExperience(u, 'archerKills', combatant?.killEnemyIds?.archer || 0);
+    addExperience(u, 'armoredKills', combatant?.armoredKills || 0);
     if (combatant && combatant.alive) {
       u.survivalCount += 1;
-      if (combatant.hp / combatant.maxHp <= CONFIG.personnel.injuryHpRatio) { u.injuryContractsRemaining = CONFIG.personnel.injuryContracts; injured.push(u.name); }
+      addExperience(u, 'battlesSurvived', 1);
+      if (combatant.hp / combatant.maxHp <= survivorInjuryRatio(u)) { u.injuryContractsRemaining = CONFIG.personnel.injuryContracts; injured.push(u.name); }
     } else {
       u.injuryContractsRemaining = CONFIG.personnel.injuryContracts + 1; injured.push(u.name);
     }
+    if (mvp && mvp.id === u.id) { u.mvpCount += 1; addExperience(u, 'mvpCount', 1); }
+    const gainedTags = evaluateSpecializations(u);
+    const newWage = finalWage(u);
+    if (gainedTags.length || oldWage !== newWage || oldMvp !== u.mvpCount) specializationResults.push({ unitName: u.name, gainedTags, oldWage, newWage, oldMvp, newMvp: u.mvpCount });
   });
   livingPersonnel().filter((u) => !u.row).forEach((u) => { u.fatigue = Math.max(0, u.fatigue - CONFIG.personnel.fatigueRecoveryPerContract); if (u.injuryContractsRemaining > 0) u.injuryContractsRemaining -= 1; });
-  const mvpCombatant = b.allies.slice().sort((a, z) => (z.kills || 0) - (a.kills || 0) || z.hp - a.hp)[0];
-  const mvp = mvpCombatant ? deployed.find((u) => u.id === mvpCombatant.personnelId) : null;
-  if (mvp) mvp.mvpCount += 1;
   const bonus = bonusAchieved(c, victory, deadCombatants, mvp);
   const reward = victory ? c.baseReward : 0;
   const bonusReward = bonus ? c.bonusReward : 0;
-  const labor = laborCost(deployed);
+  const labor = battleLabor;
   const replacements = replacementCost(deadCombatants.length);
   const profit = reward + bonusReward - labor - replacements;
-  const repGain = reputationGain(c, victory, bonus, deadCombatants);
+  const veteranRepBonus = survivedMvpReputationBonus(deployed, b.allies);
+  const repGain = reputationGain(c, victory, bonus, deadCombatants) + veteranRepBonus;
   gameState.gold += profit; gameState.totalProfit += profit; gameState.reputation += repGain;
   deployed.forEach((u) => { u.totalProfitContribution += Math.round(profit / Math.max(1, deployed.length)); u.row = null; u.slot = null; });
   if (victory && c.scoutReward) applyScoutReward(c.scoutReward);
-  gameState.economy = { reward, bonusReward, laborCost: labor, replacementCosts: replacements, profit, reputationGain: repGain, bonusAchieved: bonus };
-  gameState.report = { victory, dead: deadNames, injured, mvpName: mvp ? mvp.name : 'なし', grade: gradeFor(profit, deadCombatants.length, bonus), scoutResult: victory ? c.specialResult : null };
+  gameState.economy = { reward, bonusReward, laborCost: labor, replacementCosts: replacements, profit, reputationGain: repGain, veteranRepBonus, bonusAchieved: bonus };
+  gameState.report = { victory, dead: deadNames, injured, mvpName: mvp ? mvp.name : 'なし', grade: gradeFor(profit, deadCombatants.length, bonus), scoutResult: victory ? c.specialResult : null, specializationResults };
   gameState.mode = 'result';
   if (victory && (c.finalContract || rankInfo().rank === CONFIG.game.winRank)) gameState.message = '目標達成：魔王軍が認める優良派遣会社になりました。継続プレイ可能です。';
 }
@@ -367,12 +471,14 @@ function drawPreparation() {
   text(`Contract Reward: ${c.baseReward}G`, 70, 250, 20, CONFIG.ui.gold);
   text(`Labor Budget: ${c.laborBudget}G`, 70, 284, 20, laborCost() <= c.laborBudget ? CONFIG.ui.green : CONFIG.ui.red);
   text(`Current Labor Cost: ${laborCost()}G`, 70, 318, 22, laborCost() <= c.laborBudget ? CONFIG.ui.green : CONFIG.ui.red);
-  text(`Projected Profit: ${projectedProfit(c)}G`, 70, 354, 22, projectedProfit(c) >= 0 ? CONFIG.ui.green : CONFIG.ui.red);
-  text(`Reputation Gain: +${c.reputationReward}`, 70, 390, 20, CONFIG.ui.purple);
-  text(`Bonus Objective: ${c.bonusObjective}`, 70, 430, 16, CONFIG.ui.green);
-  text(`Bonus Reward: ${c.bonusReward}G`, 70, 456, 16, CONFIG.ui.green);
-  text(`Recommended Counter:`, 70, 500, 15, CONFIG.ui.muted);
-  wrapText(c.recommendedCounter, 70, 526, 340, 17, 14, CONFIG.ui.ink);
+  text(`Specialist Premium: +${deployedSpecializationPremium()}G`, 70, 350, 18, deployedSpecializationPremium() > 0 ? CONFIG.ui.red : CONFIG.ui.muted);
+  text(`Projected Profit: ${projectedProfit(c)}G`, 70, 380, 22, projectedProfit(c) >= 0 ? CONFIG.ui.green : CONFIG.ui.red);
+  if (deployedSpecializationPremium() > 0) text('Veteran premium is reducing projected profit.', 70, 410, 14, CONFIG.ui.red);
+  text(`Reputation Gain: +${c.reputationReward}`, 70, 436, 18, CONFIG.ui.purple);
+  text(`Bonus Objective: ${c.bonusObjective}`, 70, 466, 16, CONFIG.ui.green);
+  text(`Bonus Reward: ${c.bonusReward}G`, 70, 492, 16, CONFIG.ui.green);
+  text(`Recommended Counter:`, 70, 530, 15, CONFIG.ui.muted);
+  wrapText(c.recommendedCounter, 70, 556, 340, 17, 14, CONFIG.ui.ink);
   if (c.specialResult) text(`Scout Result: ${c.specialResult}`, 70, 650, 14, CONFIG.ui.purple);
   drawEnemyIntel(c);
   drawFormationBoard();
@@ -386,19 +492,19 @@ function drawEnemyIntel(c) {
 }
 function drawFormationBoard() {
   rect(462, 354, 360, 345, '#fffaf0', '#d4a15e', 12, 2); text('Formation Board', 482, 374, 18);
-  ['front', 'back'].forEach((row, r) => { text(row === 'front' ? 'Frontline' : 'Backline', 482, 416 + r * 105, 15, CONFIG.ui.muted); for (let slot = 0; slot < 3; slot += 1) { const x = 580 + slot * 72; const y = 404 + r * 105; const u = gameState.personnel.find((p) => p.row === row && p.slot === slot); rect(x, y, 64, 72, u ? species(u.species).color : '#ead7b7', gameState.selectedUnitId && !u ? CONFIG.ui.blue : '#8b6b45', 10, 2); if (u) { text(species(u.species).icon, x + 32, y + 10, 16, '#1d170f', 'center'); text(`${u.wage}G`, x + 32, y + 34, 12, '#1d170f', 'center'); text(`${u.fatigue}F`, x + 32, y + 52, 11, '#1d170f', 'center'); } else text('+', x + 32, y + 22, 28, CONFIG.ui.muted, 'center'); gameState.input.slots.push({ x, y, w: 64, h: 72, action: { type: 'slot', row, slot }, enabled: Boolean(gameState.selectedUnitId) }); } });
+  ['front', 'back'].forEach((row, r) => { text(row === 'front' ? 'Frontline' : 'Backline', 482, 416 + r * 105, 15, CONFIG.ui.muted); for (let slot = 0; slot < 3; slot += 1) { const x = 580 + slot * 72; const y = 404 + r * 105; const u = gameState.personnel.find((p) => p.row === row && p.slot === slot); rect(x, y, 64, 72, u ? species(u.species).color : '#ead7b7', gameState.selectedUnitId && !u ? CONFIG.ui.blue : '#8b6b45', 10, 2); if (u) { text(species(u.species).icon, x + 32, y + 10, 16, '#1d170f', 'center'); text(`${finalWage(u)}G`, x + 32, y + 34, 12, specializationPremium(u) ? CONFIG.ui.red : '#1d170f', 'center'); text(`+${specializationPremium(u)}V ${u.fatigue}F`, x + 32, y + 52, 10, '#1d170f', 'center'); } else text('+', x + 32, y + 22, 28, CONFIG.ui.muted, 'center'); gameState.input.slots.push({ x, y, w: 64, h: 72, action: { type: 'slot', row, slot }, enabled: Boolean(gameState.selectedUnitId) }); } });
   const p = contractPrediction(); rect(488, 615, 285, 68, '#fff4d6', p.projectedProfit >= 0 ? CONFIG.ui.green : CONFIG.ui.red, 10, 2); text(`Decision: Labor ${laborCost()} / Budget ${activeContract().laborBudget}`, 508, 628, 15); text(`Projected with expected loss: ${p.projectedProfit}G`, 508, 654, 16, p.projectedProfit >= 0 ? CONFIG.ui.green : CONFIG.ui.red);
   button('控えへ', 482, 710, 100, 34, { type: 'bench' }, Boolean(gameState.selectedUnitId));
   button('派遣開始', 642, 710, 150, 34, { type: 'battle' }, deployedPersonnel().length > 0);
 }
 function drawRoster() {
   rect(850, 130, 370, 570, '#fffaf0', '#d4a15e', 12, 2); text('Available / Injured / Exhausted Personnel', 872, 148, 17);
-  const sorted = livingPersonnel().slice().sort((a, b) => (isAvailable(b) - isAvailable(a)) || a.fatigue - b.fatigue);
-  sorted.slice(0, 9).forEach((u, i) => { const y = 184 + i * 56; drawUnitCard(u, 872, y, 318, 48, gameState.selectedUnitId === u.id); gameState.input.cards.push({ x: 872, y, w: 318, h: 48, action: { type: 'selectUnit', id: u.id }, enabled: isAvailable(u) }); });
+  const sorted = livingPersonnel().slice().sort((a, b) => (isAvailable(b) - isAvailable(a)) || finalWage(a) - finalWage(b) || a.fatigue - b.fatigue);
+  sorted.slice(0, 7).forEach((u, i) => { const y = 184 + i * 68; drawUnitCard(u, 872, y, 318, 60, gameState.selectedUnitId === u.id); gameState.input.cards.push({ x: 872, y, w: 318, h: 60, action: { type: 'selectUnit', id: u.id }, enabled: isAvailable(u) }); });
   const available = livingPersonnel().filter(isAvailable).length; const injured = livingPersonnel().filter((u) => u.injuryContractsRemaining > 0).length; const exhausted = livingPersonnel().filter((u) => u.injuryContractsRemaining <= 0 && u.fatigue >= CONFIG.personnel.fatigueUnavailableAt).length;
   text(`Available ${available} / Injured ${injured} / Exhausted ${exhausted}`, 872, 668, 15, CONFIG.ui.purple);
 }
-function drawUnitCard(u, x, y, w, h, selected = false) { const s = species(u.species); rect(x, y, w, h, selected ? '#fff0a8' : (isAvailable(u) ? '#fffaf0' : '#e5d4bf'), selected ? CONFIG.ui.blue : (isAvailable(u) ? '#bd965d' : CONFIG.ui.red), 10, selected ? 3 : 1); text(`${s.icon} ${u.name}`, x + 10, y + 8, 14); text(`Wage ${u.wage}G  Fatigue ${u.fatigue}  ${fatigueStatus(u)}`, x + 10, y + 27, 12, u.fatigue >= CONFIG.personnel.fatigueWarnAt || u.injuryContractsRemaining > 0 ? CONFIG.ui.red : CONFIG.ui.muted); text(s.role, x + w - 10, y + 12, 12, CONFIG.ui.muted, 'right'); }
+function drawUnitCard(u, x, y, w, h, selected = false) { const s = species(u.species); const premium = specializationPremium(u); const labels = specializationLabels(u); rect(x, y, w, h, selected ? '#fff0a8' : (isAvailable(u) ? '#fffaf0' : '#e5d4bf'), selected ? CONFIG.ui.blue : (isAvailable(u) ? '#bd965d' : CONFIG.ui.red), 10, selected ? 3 : 1); text(`${s.icon} ${u.name}`, x + 10, y + 7, 14); text(`${s.name} / ${s.role}`, x + w - 10, y + 8, 11, CONFIG.ui.muted, 'right'); text(`Base ${baseWage(u)}G + Premium ${premium}G = Final ${finalWage(u)}G`, x + 10, y + 25, 12, premium > 0 ? CONFIG.ui.red : CONFIG.ui.muted); text(`Fatigue ${u.fatigue}  ${fatigueStatus(u)}  Tags: ${labels.length ? labels.slice(0, 2).join(' / ') : 'なし'}`, x + 10, y + 42, 11, u.fatigue >= CONFIG.personnel.fatigueWarnAt || u.injuryContractsRemaining > 0 ? CONFIG.ui.red : CONFIG.ui.muted); }
 function drawBattleToken(u) { const ally = u.unitType === 'monster'; const baseX = ally ? (u.row === 'front' ? 330 : 170) : (u.row === 'front' ? 740 : 965); const y = (u.row === 'front' ? 245 : 470) + (u.slot || 0) * 55; const x = baseX + (u.attackAnimMs ? (ally ? 12 : -12) : 0); rect(x, y, 132, 48, u.alive ? u.color : '#927267', u.lastHitMs ? CONFIG.ui.red : '#3b2517', 10, u.lastHitMs ? 4 : 2); text(u.icon, x + 12, y + 8, 14); text(u.name, x + 66, y + 8, 12, '#1c180f', 'center'); hpBar(u, x + 12, y + 34, 108); }
 function drawBattle() { panel('Battle Screen - Auto Battle Only', 24, 78, 1232, 690, CONFIG.ui.red); const b = gameState.battle; text('自動戦闘中：HPバー、ダメージ、損耗、特性発動を観察します。操作介入はありません。', 54, 126, 18); text(`Time ${Math.floor((b?.timeMs || 0) / 1000)}s`, 1100, 126, 20, CONFIG.ui.gold); rect(54, 170, 1178, 488, gradient(54, 170, 1178, 488, '#9bd374', '#c9965d'), '#5f4328', 18, 4); text('DISPATCHED MONSTERS', 250, 188, 22, CONFIG.ui.blue, 'center'); text('CONTRACT ENEMIES', 910, 188, 22, CONFIG.ui.red, 'center'); [...(b?.allies || []), ...(b?.enemies || [])].forEach(drawBattleToken); rect(54, 680, 1178, 52, CONFIG.ui.dark, '#8a5a2b', 12, 2); (b?.log || []).slice(0, 3).forEach((line, i) => text(line, 76, 690 + i * 15, 13, '#fff7df')); }
 function drawResult() {
@@ -409,22 +515,25 @@ function drawResult() {
   text(`Labor Cost: -${e.laborCost}G`, 76, 306, 20, CONFIG.ui.red);
   text(`Replacement Cost: -${e.replacementCosts}G`, 76, 344, 20, CONFIG.ui.red);
   text(`Profit: ${e.profit >= 0 ? '+' : ''}${e.profit}G`, 76, 388, 30, e.profit >= 0 ? CONFIG.ui.green : CONFIG.ui.red);
-  text(`Reputation Gain: +${e.reputationGain}`, 76, 436, 22, CONFIG.ui.purple);
+  text(`Reputation Gain: +${e.reputationGain} (Veteran +${e.veteranRepBonus || 0})`, 76, 436, 22, CONFIG.ui.purple);
   text(`Grade: ${r.grade}`, 76, 476, 24, CONFIG.ui.gold);
   text(`MVP: ${r.mvpName}`, 76, 520, 20);
   text(`Casualties: ${r.dead.length ? r.dead.join(' / ') : 'なし'}`, 520, 180, 18, CONFIG.ui.red);
   text(`Injuries: ${r.injured.length ? r.injured.join(' / ') : 'なし'}`, 520, 220, 18, CONFIG.ui.red);
   if (r.scoutResult) text(`Scout Contract Result: ${r.scoutResult}`, 520, 260, 18, CONFIG.ui.purple);
-  if (gameState.message) wrapText(gameState.message, 520, 300, 620, 22, 17, CONFIG.ui.green);
-  panel('Employee Business History', 500, 350, 680, 205, CONFIG.ui.blue);
-  livingPersonnel().slice(0, 6).forEach((u, i) => text(`${u.name}: Dispatch ${u.dispatchCount}, Kills ${u.kills}, Survival ${u.survivalCount}, MVP ${u.mvpCount}, Profit ${u.totalProfitContribution}G, Fatigue ${u.fatigue}`, 526, 390 + i * 28, 14));
+  if (gameState.message) wrapText(gameState.message, 520, 292, 620, 22, 17, CONFIG.ui.green);
+  panel('Specialization Growth / Wage Changes', 500, 330, 680, 118, CONFIG.ui.purple);
+  if (r.specializationResults?.length) r.specializationResults.slice(0, 4).forEach((g, i) => { const tags = g.gainedTags.length ? formatSpecializationList(g.gainedTags) : '新規タグなし'; text(`${g.unitName}: ${tags} / Wage ${g.oldWage}G -> ${g.newWage}G / MVP ${g.oldMvp}->${g.newMvp}`, 526, 370 + i * 22, 13, g.gainedTags.length ? CONFIG.ui.red : CONFIG.ui.muted); });
+  else text('新規専門化なし。履歴だけが蓄積されました。', 526, 370, 14, CONFIG.ui.muted);
+  panel('Employee Business History', 500, 470, 680, 120, CONFIG.ui.blue);
+  livingPersonnel().slice(0, 4).forEach((u, i) => text(`${u.name}: Dispatch ${u.dispatchCount}, Kills ${u.kills}, Survival ${u.survivalCount}, MVP ${u.mvpCount}, Wage ${finalWage(u)}G, Tags ${specializationLabels(u).length ? specializationLabels(u).join('/') : 'なし'}`, 526, 506 + i * 22, 13));
   button('次の契約へ', 990, 690, 160, 38, { type: 'continue' }, true);
 }
 function drawCompany() {
   panel('Company Screen', 24, 82, 1232, 680, CONFIG.ui.purple);
   const rank = rankInfo(); text(`Reputation Rank: ${rank.rank} (${gameState.reputation} rep)`, 64, 135, 26, CONFIG.ui.purple); text(`Unlock: ${rank.unlock}`, 64, 170, 16); text(`Gold: ${gameState.gold}G   Total Profit: ${gameState.totalProfit}G`, 64, 202, 20, CONFIG.ui.gold); text(`Unlocked Species: ${gameState.unlockedSpecies.map((id) => species(id).name).join(' / ')}`, 64, 236, 18, CONFIG.ui.green);
-  rect(56, 278, 560, 240, '#fffaf0', '#d4a15e', 12, 2); text('Personnel List', 76, 296, 18); livingPersonnel().slice(0, 7).forEach((u, i) => text(`${u.name} | Wage ${u.wage}G | Fatigue ${u.fatigue} | ${fatigueStatus(u)} | Dispatch ${u.dispatchCount} | MVP ${u.mvpCount}`, 76, 330 + i * 27, 14));
-  rect(650, 130, 540, 230, '#fffaf0', '#d4a15e', 12, 2); text('New Personnel Candidates (no hiring fee; wage applies on dispatch)', 670, 148, 16); gameState.candidates.slice(0, 5).forEach((u, i) => { const y = 182 + i * 36; text(`${u.name} / ${species(u.species).role} / Wage ${u.wage}G`, 672, y, 14); button('登録', 1088, y - 4, 72, 28, { type: 'hire', id: u.id }, true); });
+  rect(56, 278, 560, 240, '#fffaf0', '#d4a15e', 12, 2); text('Personnel List', 76, 296, 18); livingPersonnel().slice(0, 7).forEach((u, i) => text(`${u.name} | Base ${baseWage(u)}G + Vet ${specializationPremium(u)}G = ${finalWage(u)}G | Fatigue ${u.fatigue} | Tags ${specializationLabels(u).length ? specializationLabels(u).join('/') : 'なし'}`, 76, 330 + i * 27, 13));
+  rect(650, 130, 540, 230, '#fffaf0', '#d4a15e', 12, 2); text('New Personnel Candidates (no hiring fee; wage applies on dispatch)', 670, 148, 16); gameState.candidates.slice(0, 5).forEach((u, i) => { const y = 182 + i * 36; text(`${u.name} / ${species(u.species).role} / Base ${baseWage(u)}G Final ${finalWage(u)}G / Tags ${specializationLabels(u).length ? specializationLabels(u).join('/') : 'なし'}`, 672, y, 13); button('登録', 1088, y - 4, 72, 28, { type: 'hire', id: u.id }, true); });
   rect(650, 390, 540, 220, '#fffaf0', '#d4a15e', 12, 2); text('Company Upgrades (options only; no combat power)', 670, 408, 17); CONFIG.upgrades.forEach((up, i) => { const lv = gameState.upgrades[up.id]; const cost = up.cost * (lv + 1); const y = 442 + i * 45; text(`${up.name} Lv${lv}/${up.max} - ${up.description}`, 670, y, 13); button(lv >= up.max ? 'MAX' : `${cost}G`, 1088, y - 4, 72, 28, { type: 'upgrade', id: up.id }, lv < up.max && gameState.gold >= cost); });
   const injured = livingPersonnel().filter((u) => u.injuryContractsRemaining > 0).map((u) => u.name); const exhausted = livingPersonnel().filter((u) => u.fatigue >= CONFIG.personnel.fatigueUnavailableAt).map((u) => u.name);
   text(`Injured Personnel: ${injured.length ? injured.join(' / ') : 'なし'}`, 64, 555, 16, CONFIG.ui.red); text(`Exhausted Personnel: ${exhausted.length ? exhausted.join(' / ') : 'なし'}`, 64, 585, 16, CONFIG.ui.red); text('信用は高Tier契約・希少種・優良クライアントを開きます。戦闘ステータスは増えません。', 64, 640, 17, CONFIG.ui.purple);
